@@ -1,0 +1,38 @@
+Overriding: device = cuda:0
+Overriding: dtype = bfloat16
+Overriding: phase = decode
+Overriding: kv_cache = True
+Overriding: prompt_len = 512
+Overriding: batch_size = 4
+Overriding: max_new_tokens = 1
+Overriding: warmup_iters = 5
+Overriding: bench_iters = 50
+Overriding: n_head = 12
+Overriding: n_kv_head = 3
+number of parameters: 112.97M
+[INFO] Saved prefix cache: C:\Users\wadka\Documents\GitHub\nanoGPT\bench_prefix\prefix_6b94a0a6fdd9.pt
+Wrote: bench_out\infer_h12_kv3_T512_B4_KVtrue_Pdecode.json
+params: {
+  "batch_size": 4,
+  "prompt_len": 512,
+  "max_new_tokens": 1,
+  "kv_cache": true,
+  "phase": "decode",
+  "prefix_source": "random",
+  "prefix_cache_dir": "bench_prefix",
+  "cache_prefix": true,
+  "prefix_seed_len": 1,
+  "n_layer": 12,
+  "n_head": 12,
+  "n_kv_head": 3,
+  "n_embd": 768,
+  "vocab_size": 50304,
+  "compile": false
+}
+metrics: {
+  "peak_alloc_bytes": 593984512,
+  "peak_reserved_bytes": 656408576,
+  "decode_total_ms": 28.966738166809083,
+  "decode_ms_per_tok": 28.966738166809083,
+  "decode_tok_s": 34.918158950539706
+}

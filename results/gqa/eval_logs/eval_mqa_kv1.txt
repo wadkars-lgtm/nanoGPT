@@ -1,0 +1,4 @@
+number of parameters: 9.05M
+ckpt=out-attn\mqa_h12_kv1_best.pt
+val_loss=1.475442
+val_ppl=4.3730

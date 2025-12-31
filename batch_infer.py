@@ -1,7 +1,7 @@
 """
 batch_infer.py
 
-Single-run inference benchmark/profiling harness for nanoGPT.
+Single-run inference benchmark/profiler harness for nanoGPT.
 
 What it can do:
 1) Build a prefix of length prompt_len (random or model-generated), optionally cached to disk.
@@ -10,7 +10,7 @@ What it can do:
 
 Output:
 Writes ONE JSON artifact per run under out_dir with semantic naming:
-  infer_T{prompt_len}_B{batch_size}_KV{true|false}_P{phase}.json
+  infer_h{n_head}_kv{n_kv_head}_T{prompt_len}_B{batch_size}_KV{true|false}_P{phase}.json
 Where phase is one of: both | prefill | decode
 
 Defaults:
@@ -35,13 +35,16 @@ try:
 except Exception:
     nvtx = None
 
+
 def nvtx_push(name: str, device_type: str) -> None:
     if nvtx is not None and device_type == "cuda":
         nvtx.range_push(name)
 
+
 def nvtx_pop(device_type: str) -> None:
     if nvtx is not None and device_type == "cuda":
         nvtx.range_pop()
+
 
 # -----------------------------------------------------------------------------
 # Defaults (override via CLI / configurator.py)
@@ -51,6 +54,7 @@ max_new_tokens = 256
 
 n_layer = 12
 n_head = 12
+n_kv_head = 12  # ✅ IMPORTANT: allow sweeps to actually change KV head count
 n_embd = 768
 vocab_size = 50304
 
@@ -64,7 +68,7 @@ compile = False
 
 kv_cache = False
 
-prefix_source = "random"   # "random" or "model"
+prefix_source = "random"  # "random" or "model"
 prefix_seed_len = 1
 
 warmup_iters = 2
@@ -73,14 +77,10 @@ bench_iters = 10
 out_dir = "bench_out"
 prefix_cache_dir = "bench_prefix"
 
-# NEW: prefix caching toggle
-# For profiling you often want this False to avoid disk/cache code.
+# prefix caching toggle (for profiling you often want this False to avoid disk/cache code)
 cache_prefix = True
 
-# NEW: phase control
-# "both" (default): time prefill + decode
-# "prefill": time only prefill
-# "decode": time only decode-only
+# phase control: "both" | "prefill" | "decode"
 phase = "both"
 
 # nanoGPT-style overrides (CLI: --key=value)
@@ -95,6 +95,12 @@ dtype = str(dtype).lower().strip()
 if dtype not in ("float16", "bfloat16", "float32"):
     raise ValueError(f"dtype must be one of float16|bfloat16|float32, got: {dtype}")
 
+# normalize n_kv_head if configurator set it as a string
+n_kv_head = int(n_kv_head)
+
+if n_head % n_kv_head != 0:
+    raise ValueError(f"Invalid heads: n_head={n_head} must be divisible by n_kv_head={n_kv_head}")
+
 device_type = "cuda" if "cuda" in str(device).lower() else "cpu"
 ptdtype = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}[dtype]
 ctx = nullcontext() if device_type == "cpu" else torch.amp.autocast(device_type=device_type, dtype=ptdtype)
@@ -102,7 +108,6 @@ ctx = nullcontext() if device_type == "cpu" else torch.amp.autocast(device_type=
 torch.manual_seed(seed)
 if device_type == "cuda":
     torch.cuda.manual_seed(seed)
-    # TF32 only affects float32 matmul/conv on Ampere+; it does NOT change fp16/bf16 math.
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
 
@@ -113,6 +118,7 @@ gptconf = GPTConfig(
     vocab_size=vocab_size,
     n_layer=n_layer,
     n_head=n_head,
+    n_kv_head=n_kv_head,  # ✅ IMPORTANT: actually instantiate GQA/MQA
     n_embd=n_embd,
     dropout=0.0,
     bias=False,
@@ -125,10 +131,12 @@ if compile:
 # -----------------------------------------------------------------------------
 # Utilities
 
+
 def _reset_peak_mem():
     if device_type == "cuda":
         torch.cuda.synchronize()
         torch.cuda.reset_peak_memory_stats()
+
 
 def _get_peak_mem() -> Tuple[int, int]:
     if device_type == "cuda":
@@ -137,6 +145,7 @@ def _get_peak_mem() -> Tuple[int, int]:
             int(torch.cuda.max_memory_reserved()),
         )
     return 0, 0
+
 
 def _cuda_time_ms(fn) -> float:
     if device_type == "cuda":
@@ -153,13 +162,17 @@ def _cuda_time_ms(fn) -> float:
         fn()
         return (time.time() - t0) * 1000.0
 
+
 def _supports_kv_api(m) -> bool:
     import inspect
+
     sig = inspect.signature(m.forward)
     return ("use_cache" in sig.parameters) and ("past_kv" in sig.parameters)
 
+
 # -----------------------------------------------------------------------------
 # Prefix builders (optional caching)
+
 
 def _prefix_cache_path() -> str:
     os.makedirs(prefix_cache_dir, exist_ok=True)
@@ -172,16 +185,18 @@ def _prefix_cache_path() -> str:
         "vocab_size": vocab_size,
         "n_layer": n_layer,
         "n_head": n_head,
+        "n_kv_head": n_kv_head,  # ✅ include in cache key so kv sweeps don't reuse prefixes incorrectly
         "n_embd": n_embd,
         "dtype": dtype,
     }
     h = hashlib.sha1(json.dumps(key, sort_keys=True).encode("utf-8")).hexdigest()[:12]
     return os.path.join(prefix_cache_dir, f"prefix_{h}.pt")
 
+
 @torch.no_grad()
 def build_prefix_random() -> torch.Tensor:
-    # purely random tokens (fastest, good for benchmarking mechanics)
     return torch.randint(vocab_size, (batch_size, prompt_len), device=device)
+
 
 @torch.no_grad()
 def build_prefix_model_generated() -> torch.Tensor:
@@ -213,10 +228,10 @@ def build_prefix_model_generated() -> torch.Tensor:
 
     return torch.cat(tokens, dim=1)
 
+
 @torch.no_grad()
 def get_or_build_prefix() -> torch.Tensor:
     if not cache_prefix:
-        # no disk/cache logic at all (best for profiling purity)
         return build_prefix_model_generated() if prefix_source == "model" else build_prefix_random()
 
     path = _prefix_cache_path()
@@ -233,8 +248,10 @@ def get_or_build_prefix() -> torch.Tensor:
     print(f"[INFO] Saved prefix cache: {os.path.abspath(path)}")
     return prefix
 
+
 # -----------------------------------------------------------------------------
 # Decode paths
+
 
 @torch.no_grad()
 def decode_only_no_kv(prefix: torch.Tensor):
@@ -244,6 +261,7 @@ def decode_only_no_kv(prefix: torch.Tensor):
             logits, _ = model(idx, None)
             nxt = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
         idx = torch.cat([idx, nxt], dim=1)
+
 
 @torch.no_grad()
 def decode_only_kv(prefix: torch.Tensor):
@@ -263,8 +281,10 @@ def decode_only_kv(prefix: torch.Tensor):
         nxt = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
         last = nxt
 
+
 # -----------------------------------------------------------------------------
 # Benchmark core
+
 
 def bench_once(prefix: torch.Tensor) -> Dict[str, Any]:
     _reset_peak_mem()
@@ -272,6 +292,7 @@ def bench_once(prefix: torch.Tensor) -> Dict[str, Any]:
 
     # Prefill timing (optional)
     if phase in ("both", "prefill"):
+
         def do_prefill():
             nvtx_push("prefill", device_type)
             with ctx:
@@ -287,6 +308,7 @@ def bench_once(prefix: torch.Tensor) -> Dict[str, Any]:
 
     # Decode-only timing (optional)
     if phase in ("both", "decode"):
+
         def do_decode():
             nvtx_push("decode", device_type)
             if kv_cache:
@@ -305,8 +327,10 @@ def bench_once(prefix: torch.Tensor) -> Dict[str, Any]:
     metrics["peak_reserved_bytes"] = peak_reserved
     return metrics
 
+
 # -----------------------------------------------------------------------------
 # Main
+
 
 def main():
     os.makedirs(out_dir, exist_ok=True)
@@ -361,6 +385,7 @@ def main():
             "prefix_seed_len": prefix_seed_len,
             "n_layer": n_layer,
             "n_head": n_head,
+            "n_kv_head": n_kv_head,  # ✅ include in JSON so plots/debugging can sanity-check
             "n_embd": n_embd,
             "vocab_size": vocab_size,
             "compile": bool(compile),
@@ -369,7 +394,8 @@ def main():
     }
 
     kv_str = "true" if kv_cache else "false"
-    fname = f"infer_T{prompt_len}_B{batch_size}_KV{kv_str}_P{phase}.json"
+    # ✅ include heads so kv sweeps don't overwrite each other
+    fname = f"infer_h{n_head}_kv{n_kv_head}_T{prompt_len}_B{batch_size}_KV{kv_str}_P{phase}.json"
     out_path = os.path.join(out_dir, fname)
 
     if os.path.exists(out_path):
@@ -381,6 +407,7 @@ def main():
     print(f"Wrote: {out_path}")
     print("params:", json.dumps(result["params"], indent=2))
     print("metrics:", json.dumps(result["metrics"], indent=2))
+
 
 if __name__ == "__main__":
     main()

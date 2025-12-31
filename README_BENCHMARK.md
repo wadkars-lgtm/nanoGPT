@@ -19,6 +19,9 @@ It is a controlled experimental harness for understanding:
 Baseline reference:
 https://github.com/karpathy/nanoGPT
 
+> **Note:** This repo also includes experiments on MHA / GQA / MQA attention layouts.  
+> See [`README_addendum_mha_gqa_mqa.md`](./README_addendum_mha_gqa_mqa.md).
+
 ### Modified / New Files
 
 | File | Purpose |
