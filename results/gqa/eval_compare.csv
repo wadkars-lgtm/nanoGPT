@@ -1,4 +1,1 @@
-label,n_kv_head,val_loss,val_ppl,ckpt,log_path
-MHA,12,1.469756,4.3482,out-attn\mha_h12_kv12_best.pt,results\gqa\eval_logs\eval_mha_kv12.txt
-GQA,3,1.473856,4.366,out-attn\gqa_h12_kv3_best.pt,results\gqa\eval_logs\eval_gqa_kv3.txt
-MQA,1,1.475442,4.373,out-attn\mqa_h12_kv1_best.pt,results\gqa\eval_logs\eval_mqa_kv1.txt
+mode,n_kv_head,val_loss,val_ppl

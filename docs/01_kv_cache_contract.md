@@ -24,7 +24,7 @@ This reduces decode-time complexity from **O(T²)** to **O(T)** per generated to
 ### GPT.forward signature
 
 ```python
-GPT.forward(
+nanogpt.model.GPT.forward(
     idx,
     targets=None,
     use_cache: bool = False,

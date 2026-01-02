@@ -1,4 +1,4 @@
 number of parameters: 10.67M
 ckpt=out-attn\mha_h12_kv12_best.pt
-val_loss=1.469756
-val_ppl=4.3482
+val_loss=1.466842
+val_ppl=4.3355
