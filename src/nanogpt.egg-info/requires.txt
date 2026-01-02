@@ -1,0 +1,16 @@
+typing-extensions
+numpy
+tqdm
+transformers
+datasets
+sentencepiece
+requests
+tiktoken
+
+[bench]
+matplotlib
+
+[dev]
+pytest
+ruff
+ipykernel

@@ -24,12 +24,12 @@ https://github.com/karpathy/nanoGPT
 
 ### Modified / New Files
 
-| File | Purpose |
-|-----|--------|
-| `model.py` | Adds KV cache support, offset causal masking, and cache-aware forward path |
-| `batch_infer.py` | Single-run inference benchmark (prefill + decode-only) |
-| `run_sweep.py` | Grid sweep driver that aggregates JSON → CSV → plots |
-| `bench_out/` | All benchmark artifacts (JSON, CSV, PNG) |
+| File                   | Purpose |
+|------------------------|--------|
+| `src/nanogptmodel.py`  | Adds KV cache support, offset causal masking, and cache-aware forward path |
+| `bench/batch_infer.py` | Single-run inference benchmark (prefill + decode-only) |
+| `bench/run_sweep.py`   | Grid sweep driver that aggregates JSON → CSV → plots |
+| `results/bench_out/`   | All benchmark artifacts (JSON, CSV, PNG) |
 
 
 ---
@@ -58,7 +58,7 @@ Important properties:
 All plots and CSVs below are generated from:
 
 ```text
-bench_out/bf16/
+bench/bench_out/bf16/
 ```
 
 These results were collected using **bfloat16**, identical model config,
@@ -71,10 +71,10 @@ and identical prefixes across KV modes.
 
 ### KV Cache = False
 - Plot:  
-  `bench_out/bf16/plot_decode_ms_per_tok_kv_False.png`
-  ![Decode ms/token vs prompt length (KV cache = False)](bench_out/bf16/plot_decode_ms_per_tok_kv_False.png)  
-- [Raw data](bench_out/bf16/sweep_kv_False.csv):  
-  `bench_out/bf16/sweep_kv_False.csv`
+  `results/bench_out/bf16/plot_decode_ms_per_tok_kv_False.png`
+  ![Decode ms/token vs prompt length (KV cache = False)](results/bench_out/bf16/plot_decode_ms_per_tok_kv_False.png)  
+- [Raw data](results/bench_out/bf16/sweep_kv_False.csv):  
+  `results/bench_out/bf16/sweep_kv_False.csv`
 
 Observations:
 - Decode cost grows rapidly with prompt length
@@ -84,10 +84,10 @@ Observations:
 
 ### KV Cache = True
 - Plot:  
-  `bench_out/bf16/plot_decode_ms_per_tok_kv_True.png`
-  ![Decode ms/token vs prompt length (KV cache = True)](bench_out/bf16/plot_decode_ms_per_tok_kv_True.png)
-- [Raw data](bench_out/bf16/sweep_kv_True.csv):  
-  `bench_out/bf16/sweep_kv_True.csv`
+  `results/bench_out/bf16/plot_decode_ms_per_tok_kv_True.png`
+  ![Decode ms/token vs prompt length (KV cache = True)](results/bench_out/bf16/plot_decode_ms_per_tok_kv_True.png)
+- [Raw data](results/bench_out/bf16/sweep_kv_True.csv):  
+  `results/bench_out/bf16/sweep_kv_True.csv`
 
 Observations:
 - Decode latency is dramatically reduced vs no-KV
@@ -101,12 +101,12 @@ Observations:
 
 ### KV Cache = False
 - Plot:  
-  `bench_out/bf16/plot_peak_alloc_gib_kv_False.png`
-  ![Peak GPU memory vs prompt length (KV cache = False)](bench_out/bf16/plot_peak_alloc_gib_kv_False.png)
+  `results/bench_out/bf16/plot_peak_alloc_gib_kv_False.png`
+  ![Peak GPU memory vs prompt length (KV cache = False)](results/bench_out/bf16/plot_peak_alloc_gib_kv_False.png)
 ### KV Cache = True
 - Plot:  
-  `bench_out/bf16/plot_peak_alloc_gib_kv_True.png`
-  ![Peak GPU memory vs prompt length (KV cache = True)](bench_out/bf16/plot_peak_alloc_gib_kv_True.png)
+  `results/bench_out/bf16/plot_peak_alloc_gib_kv_True.png`
+  ![Peak GPU memory vs prompt length (KV cache = True)](results/bench_out/bf16/plot_peak_alloc_gib_kv_True.png)
 
 Observations:
 - Peak memory scales linearly with `(batch_size × prompt_len)`
@@ -129,8 +129,8 @@ Observations:
 ## How to Reproduce (PowerShell)
 
 ```powershell
-python run_sweep.py `
-  --out_dir=bench_out/bf16 `
+python -m bench.run_sweep `
+  --out_dir=results/bench_out/bf16 `
   --dtype=bfloat16 `
   --prefix_source=random `
   --kv_modes=False,True `
@@ -139,6 +139,7 @@ python run_sweep.py `
   --max_new_tokens=128 `
   --warmup_iters=1 `
   --bench_iters=3
+
 ```
 
 This produces:

@@ -1,0 +1,15 @@
+LICENSE
+README.md
+pyproject.toml
+src/nanogpt/__init__.py
+src/nanogpt/model.py
+src/nanogpt.egg-info/PKG-INFO
+src/nanogpt.egg-info/SOURCES.txt
+src/nanogpt.egg-info/dependency_links.txt
+src/nanogpt.egg-info/requires.txt
+src/nanogpt.egg-info/top_level.txt
+src/nanogpt/scripts/__init__.py
+src/nanogpt/scripts/swa_sanity.py
+tests/test_attention_correctness.py
+tests/test_gqa_correctness.py
+tests/tests_swa.py

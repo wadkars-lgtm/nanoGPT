@@ -11,4 +11,6 @@ input.txt
 env/
 venv/
 /.venv/
+/results/ncu/*
 /results/nsys/*
+/results/prefix_cache/*
