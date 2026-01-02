@@ -148,3 +148,100 @@ This produces:
 - `plot_*.png` (visualizations)
 
 
+---
+
+## How to Reproduce with Rope and non-rope (PowerShell)
+
+```powershell
+python -m bench.run_sweep `
+  --out_dir=results/sweeps/mha_norope `
+  --prefix_cache_dir=results/prefix_cache/mha_norope `
+  --prefix_source=model `
+  --dtype=bfloat16 `
+  --kv_modes=False,True `
+  --prompt_lens=128,512,1024,2048 `
+  --batch_sizes=1,2,4,8 `
+  --max_new_tokens=128 `
+  --warmup_iters=1 `
+  --bench_iters=3 `
+  --ckpt=out-attn/mha_h12_kv12_best.pt  
+  ```
+
+```powershell
+python -m bench.run_sweep `
+  --out_dir=results/sweeps/mha_rope `
+  --prefix_cache_dir=results/prefix_cache/mha_rope `
+  --prefix_source=model `
+  --dtype=bfloat16 `
+  --kv_modes=False,True `
+  --prompt_lens=128,512,1024,2048 `
+  --batch_sizes=1,2,4,8 `
+  --max_new_tokens=128 `
+  --warmup_iters=1 `
+  --bench_iters=3 `
+  --ckpt=out-attn/mha_h12_kv12_rope_best.pt  
+  ```
+
+```powershell
+python -m bench.run_sweep `
+  --out_dir=results/sweeps/gqa_norope `
+  --prefix_cache_dir=results/prefix_cache/gqa_norope `
+  --prefix_source=model `
+  --dtype=bfloat16 `
+  --kv_modes=False,True `
+  --prompt_lens=128,512,1024,2048 `
+  --batch_sizes=1,2,4,8 `
+  --max_new_tokens=128 `
+  --warmup_iters=1 `
+  --bench_iters=3 `
+  --ckpt=out-attn/gqa_h12_kv3_best.pt
+
+  
+```
+
+```powershell
+python -m bench.run_sweep `
+  --out_dir=results/sweeps/gqa_rope `
+  --prefix_cache_dir=results/prefix_cache/gqa_rope `
+  --prefix_source=model `
+  --dtype=bfloat16 `
+  --kv_modes=False,True `
+  --prompt_lens=128,512,1024,2048 `
+  --batch_sizes=1,2,4,8 `
+  --max_new_tokens=128 `
+  --warmup_iters=1 `
+  --bench_iters=3 `
+  --ckpt=out-attn/gqa_h12_kv3_rope_best.pt
+  
+ ```
+
+```powershell
+python -m bench.run_sweep `
+  --out_dir=results/sweeps/mqa_norope `
+  --prefix_cache_dir=results/prefix_cache/mqa_norope `
+  --prefix_source=model `
+  --dtype=bfloat16 `
+  --kv_modes=False,True `
+  --prompt_lens=128,512,1024,2048 `
+  --batch_sizes=1,2,4,8 `
+  --max_new_tokens=128 `
+  --warmup_iters=1 `
+  --bench_iters=3 `
+  --ckpt=out-attn/mqa_h12_kv1_best.pt
+
+  ```
+
+```powershell
+python -m bench.run_sweep `
+  --out_dir=results/sweeps/mqa_rope `
+  --prefix_cache_dir=results/prefix_cache/mqa_rope `
+  --prefix_source=model `
+  --dtype=bfloat16 `
+  --kv_modes=False,True `
+  --prompt_lens=128,512,1024,2048 `
+  --batch_sizes=1,2,4,8 `
+  --max_new_tokens=128 `
+  --warmup_iters=1 `
+  --bench_iters=3 `
+  --ckpt=out-attn/mqa_h12_kv1_rope_best.pt
+  ```

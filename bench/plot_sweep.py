@@ -1,4 +1,6 @@
 """
+plot_sweep.py
+
 Plot sweep results produced by sweep_n_kv_head.py.
 
 Inputs:
@@ -11,12 +13,17 @@ Outputs:
 
 This script does NOT run any CUDA. It only parses logs + plots.
 
-Update:
-- Your batch_infer.py prints a JSON-ish metrics block AND writes a JSON file:
-    Wrote: bench_out\\infer_T2048_B16_KVtrue_Pdecode.json
-  So we now:
-    (1) Prefer parsing the "Wrote: ...json" artifact (most robust)
-    (2) Fallback to regex parsing of the log text
+Robustness:
+- Prefer parsing the JSON artifact referenced by a log line like:
+    Wrote: bench_out\\infer_T2048_B16_KVtrue.json
+- Fallback to regex parsing of the log text.
+
+RoPE note:
+- If your sweep includes BOTH use_rope=True and use_rope=False, plots can get overwritten
+  unless we separate them. This script will:
+    (1) split plots per use_rope value (if present in sweep.csv)
+    (2) add a suffix (_rope / _norope) to filenames
+    (3) include RoPE/NoRoPE in legend labels
 """
 
 from __future__ import annotations
@@ -38,18 +45,9 @@ WROTE_JSON_RE = re.compile(r"^\s*Wrote:\s*(.+?\.json)\s*$", re.MULTILINE)
 # -----------------------
 # Regex fallback (for logs that don't write JSON)
 # -----------------------
-# These patterns are tailored to your log snippet:
-# metrics: {
-#   "decode_total_ms": 513.47,
-#   "decode_ms_per_tok": 513.47,
-#   "decode_tok_s": 1.94,
-#   "peak_alloc_bytes": 5350210560,
-#   ...
-# }
 METRIC_REGEX = {
     "ms_per_tok": [
         re.compile(r'"decode_ms_per_tok"\s*:\s*([0-9]+(?:\.[0-9]+)?)', re.IGNORECASE),
-        # legacy / other print styles
         re.compile(r"(?:ms\s*/\s*tok|ms_per_tok)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE),
     ],
     "tok_per_s": [
@@ -64,8 +62,6 @@ METRIC_REGEX = {
         re.compile(r'"prefill_total_ms"\s*:\s*([0-9]+(?:\.[0-9]+)?)', re.IGNORECASE),
         re.compile(r"(?:prefill[_\s]*total[_\s]*ms|prefill[_\s]*ms)\s*[:=]\s*([0-9]+(?:\.[0-9]+)?)", re.IGNORECASE),
     ],
-    # We don't have "peak_mem_mb" in your logs, you have bytes.
-    # We'll parse peak_alloc_bytes and convert -> MB.
     "peak_alloc_bytes": [
         re.compile(r'"peak_alloc_bytes"\s*:\s*(\d+)', re.IGNORECASE),
     ],
@@ -106,9 +102,6 @@ def parse_metrics_from_json_artifact(log_text: str, log_path: Path) -> dict:
 
     raw = m.group(1).strip().strip('"').strip("'")
 
-    # JSON path can be relative to repo root, or absolute.
-    # If it's relative, interpret relative to repo root (cwd),
-    # but if user ran from elsewhere, relative to log dir is a decent fallback.
     p = Path(raw)
     if not p.is_absolute():
         # prefer cwd-relative first
@@ -134,7 +127,6 @@ def parse_metrics_from_json_artifact(log_text: str, log_path: Path) -> dict:
 
     out: dict[str, float | None] = {}
 
-    # Normalize the names our plotting code expects
     # decode
     if "decode_ms_per_tok" in metrics:
         out["ms_per_tok"] = float(metrics["decode_ms_per_tok"])
@@ -143,14 +135,13 @@ def parse_metrics_from_json_artifact(log_text: str, log_path: Path) -> dict:
     if "decode_total_ms" in metrics:
         out["decode_total_ms"] = float(metrics["decode_total_ms"])
 
-    # prefill (if present)
+    # prefill
     if "prefill_total_ms" in metrics:
         out["prefill_total_ms"] = float(metrics["prefill_total_ms"])
     if "prefill_ms_per_tok" in metrics and out.get("ms_per_tok") is None:
-        # sometimes prefill-only runs might store prefill_ms_per_tok
         out["ms_per_tok"] = float(metrics["prefill_ms_per_tok"])
 
-    # peak memory in MB (from bytes)
+    # peak memory (bytes -> MB)
     peak_alloc_bytes = metrics.get("peak_alloc_bytes", None)
     peak_reserved_bytes = metrics.get("peak_reserved_bytes", None)
 
@@ -159,8 +150,7 @@ def parse_metrics_from_json_artifact(log_text: str, log_path: Path) -> dict:
     elif peak_reserved_bytes is not None:
         out["peak_mem_mb"] = _to_mb(float(peak_reserved_bytes))
 
-    # Also optionally expose params if you ever want them later
-    # (we don't rely on these for plotting)
+    # optional
     if "phase" in params:
         out["phase_from_json"] = params["phase"]
 
@@ -180,7 +170,6 @@ def parse_log(log_path: Path) -> dict:
     for k, pats in METRIC_REGEX.items():
         out[k] = first_match(txt, pats)
 
-    # derive peak_mem_mb if we have bytes
     peak_alloc = out.get("peak_alloc_bytes")
     peak_res = out.get("peak_reserved_bytes")
 
@@ -191,7 +180,6 @@ def parse_log(log_path: Path) -> dict:
         peak_mem_mb = _to_mb(peak_res)
 
     out["peak_mem_mb"] = peak_mem_mb
-
     return out
 
 
@@ -203,6 +191,18 @@ def kv_label(n_head: int, n_kv_head: int) -> str:
     return f"GQA (kv={n_kv_head})"
 
 
+def rope_suffix(use_rope_val) -> str:
+    # use_rope might be bool, int, or string depending on how csv got written
+    if isinstance(use_rope_val, bool):
+        return "rope" if use_rope_val else "norope"
+    s = str(use_rope_val).strip().lower()
+    return "rope" if s in ("1", "true", "yes", "y", "t") else "norope"
+
+
+def rope_tag(use_rope_val) -> str:
+    return "RoPE" if rope_suffix(use_rope_val) == "rope" else "NoRoPE"
+
+
 def save_plot(fig, out_path: Path):
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
@@ -210,11 +210,42 @@ def save_plot(fig, out_path: Path):
     plt.close(fig)
 
 
+def pick_metric_and_label(pdf: pd.DataFrame) -> tuple[str, str, str]:
+    # Decide metric preference:
+    # - If ms_per_tok exists, use it
+    # - else if tok_per_s exists, use it
+    # - else fallback to decode_total_ms / prefill_total_ms
+    phase = str(pdf["phase"].iloc[0]) if "phase" in pdf.columns else "decode"
+
+    if "ms_per_tok" in pdf.columns and pdf["ms_per_tok"].notna().any():
+        return phase, "ms_per_tok", "ms / token"
+    if "tok_per_s" in pdf.columns and pdf["tok_per_s"].notna().any():
+        return phase, "tok_per_s", "tokens / second"
+    if phase == "decode" and "decode_total_ms" in pdf.columns and pdf["decode_total_ms"].notna().any():
+        return phase, "decode_total_ms", "decode total (ms)"
+    if phase == "prefill" and "prefill_total_ms" in pdf.columns and pdf["prefill_total_ms"].notna().any():
+        return phase, "prefill_total_ms", "prefill total (ms)"
+
+    available = sorted(
+        [
+            c
+            for c in pdf.columns
+            if c in ("ms_per_tok", "tok_per_s", "decode_total_ms", "prefill_total_ms", "peak_mem_mb")
+        ]
+    )
+    raise RuntimeError(
+        "No usable metrics found in logs.\n"
+        f"Available parsed metric columns: {available}\n"
+        "If your logs write JSON, ensure the log contains a line: Wrote: <path>.json\n"
+    )
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default="results/gqa/sweep.csv")
     ap.add_argument("--plots_dir", default="results/gqa/plots")
     ap.add_argument("--write_parsed_csv", action="store_true")
+    
     args = ap.parse_args()
 
     csv_path = Path(args.csv)
@@ -250,132 +281,122 @@ def main():
 
     pdf = pd.DataFrame(rows)
 
-    # Add labels for grouping
-    pdf["mode"] = pdf.apply(lambda x: kv_label(int(x["n_head"]), int(x["n_kv_head"])), axis=1)
-
     # Optional debug CSV (great for sanity checking extraction)
     if args.write_parsed_csv:
         out_parsed = csv_path.parent / "parsed.csv"
         pdf.to_csv(out_parsed, index=False)
         print(f"Wrote parsed table: {out_parsed}")
 
-    # Decide metric preference:
-    # - If ms_per_tok exists, use it
-    # - else if tok_per_s exists, use it
-    # - else fallback to decode_total_ms for decode phase
-    phase = str(pdf["phase"].iloc[0]) if "phase" in pdf.columns else "decode"
+    # Determine if we need to split by RoPE
+    split_by_rope = "use_rope" in pdf.columns and pdf["use_rope"].nunique(dropna=False) > 1
 
-    metric = None
-    if "ms_per_tok" in pdf.columns and pdf["ms_per_tok"].notna().any():
-        metric = "ms_per_tok"
-        ylab = "ms / token"
-    elif "tok_per_s" in pdf.columns and pdf["tok_per_s"].notna().any():
-        metric = "tok_per_s"
-        ylab = "tokens / second"
-    elif phase == "decode" and "decode_total_ms" in pdf.columns and pdf["decode_total_ms"].notna().any():
-        metric = "decode_total_ms"
-        ylab = "decode total (ms)"
-    elif phase == "prefill" and "prefill_total_ms" in pdf.columns and pdf["prefill_total_ms"].notna().any():
-        metric = "prefill_total_ms"
-        ylab = "prefill total (ms)"
-    else:
-        # Dump a tiny hint to help debug quickly
-        available = sorted([c for c in pdf.columns if c in ("ms_per_tok", "tok_per_s", "decode_total_ms", "prefill_total_ms", "peak_mem_mb")])
-        raise RuntimeError(
-            "No usable metrics found in logs.\n"
-            f"Available parsed metric columns: {available}\n"
-            "If your logs write JSON, ensure the log contains a line: Wrote: <path>.json\n"
-        )
+    # Helper to add legend mode label
+    def add_mode_col(frame: pd.DataFrame) -> pd.DataFrame:
+        if "use_rope" in frame.columns:
+            frame["mode"] = frame.apply(
+                lambda x: f"{kv_label(int(x['n_head']), int(x['n_kv_head']))} [{rope_tag(x['use_rope'])}]",
+                axis=1,
+            )
+        else:
+            frame["mode"] = frame.apply(lambda x: kv_label(int(x["n_head"]), int(x["n_kv_head"])), axis=1)
+        return frame
 
-    print(f"Using metric: {metric} ({ylab})")
-    print(f"Rows with metric present: {pdf[metric].notna().sum()} / {len(pdf)}")
+    # Plot per rope group if needed; else just once.
+    rope_groups = [None]
+    if split_by_rope:
+        rope_groups = sorted(pdf["use_rope"].unique().tolist(), key=lambda v: rope_suffix(v))
 
-    # -----------------------
-    # Plot 1: metric vs prompt_len for each kv head, per batch size
-    # -----------------------
-    for B in sorted(pdf["batch_size"].unique()):
-        sub = pdf[pdf["batch_size"] == B].copy()
-        sub = sub[sub[metric].notna()]
-        if sub.empty:
+    for rope_val in rope_groups:
+        if rope_val is None:
+            cur = pdf.copy()
+            file_suffix = ""
+            title_suffix = ""
+        else:
+            cur = pdf[pdf["use_rope"] == rope_val].copy()
+            file_suffix = f"_{rope_suffix(rope_val)}"
+            title_suffix = f" ({rope_tag(rope_val)})"
+
+        if cur.empty:
             continue
 
-        fig = plt.figure()
-        ax = plt.gca()
+        cur = add_mode_col(cur)
 
-        for n_kv in sorted(sub["n_kv_head"].unique()):
-            s2 = sub[sub["n_kv_head"] == n_kv].sort_values("prompt_len")
-            ax.plot(
-                s2["prompt_len"],
-                s2[metric],
-                marker="o",
-                label=kv_label(int(s2["n_head"].iloc[0]), int(n_kv)),
-            )
+        phase, metric, ylab = pick_metric_and_label(cur)
 
-        ax.set_title(f"{phase}: {ylab} vs prompt_len (batch={B})")
-        ax.set_xlabel("prompt_len")
-        ax.set_ylabel(ylab)
-        ax.legend()
+        print(f"Using metric: {metric} ({ylab}){title_suffix}")
+        print(f"Rows with metric present: {cur[metric].notna().sum()} / {len(cur)}")
 
-        out_path = plots_dir / f"{phase}_{metric}_vs_promptlen_B{B}.png"
-        save_plot(fig, out_path)
-
-    # -----------------------
-    # Plot 2: metric vs batch_size for each kv head, per prompt length
-    # -----------------------
-    for T in sorted(pdf["prompt_len"].unique()):
-        sub = pdf[pdf["prompt_len"] == T].copy()
-        sub = sub[sub[metric].notna()]
-        if sub.empty:
-            continue
-
-        fig = plt.figure()
-        ax = plt.gca()
-
-        for n_kv in sorted(sub["n_kv_head"].unique()):
-            s2 = sub[sub["n_kv_head"] == n_kv].sort_values("batch_size")
-            ax.plot(
-                s2["batch_size"],
-                s2[metric],
-                marker="o",
-                label=kv_label(int(s2["n_head"].iloc[0]), int(n_kv)),
-            )
-
-        ax.set_title(f"{phase}: {ylab} vs batch_size (prompt_len={T})")
-        ax.set_xlabel("batch_size")
-        ax.set_ylabel(ylab)
-        ax.legend()
-
-        out_path = plots_dir / f"{phase}_{metric}_vs_batchsize_T{T}.png"
-        save_plot(fig, out_path)
-
-    # -----------------------
-    # Plot 3: peak memory vs prompt_len (if present)
-    # -----------------------
-    if "peak_mem_mb" in pdf.columns and pdf["peak_mem_mb"].notna().any():
-        for B in sorted(pdf["batch_size"].unique()):
-            sub = pdf[(pdf["batch_size"] == B) & (pdf["peak_mem_mb"].notna())].copy()
+        # -----------------------
+        # Plot 1: metric vs prompt_len for each kv head, per batch size
+        # -----------------------
+        for B in sorted(cur["batch_size"].unique()):
+            sub = cur[cur["batch_size"] == B].copy()
+            sub = sub[sub[metric].notna()]
             if sub.empty:
                 continue
 
             fig = plt.figure()
             ax = plt.gca()
 
-            for n_kv in sorted(sub["n_kv_head"].unique()):
-                s2 = sub[sub["n_kv_head"] == n_kv].sort_values("prompt_len")
-                ax.plot(
-                    s2["prompt_len"],
-                    s2["peak_mem_mb"],
-                    marker="o",
-                    label=kv_label(int(s2["n_head"].iloc[0]), int(n_kv)),
-                )
+            for mode in sorted(sub["mode"].unique()):
+                s2 = sub[sub["mode"] == mode].sort_values("prompt_len")
+                ax.plot(s2["prompt_len"], s2[metric], marker="o", label=mode)
 
-            ax.set_title(f"{phase}: peak_mem_mb vs prompt_len (batch={B})")
+            ax.set_title(f"{phase}: {ylab} vs prompt_len (batch={B}){title_suffix}")
             ax.set_xlabel("prompt_len")
-            ax.set_ylabel("peak memory (MB)")
+            ax.set_ylabel(ylab)
             ax.legend()
 
-            out_path = plots_dir / f"{phase}_peakmem_vs_promptlen_B{B}.png"
+            out_path = plots_dir / f"{phase}_{metric}_vs_promptlen_B{B}{file_suffix}.png"
             save_plot(fig, out_path)
+
+        # -----------------------
+        # Plot 2: metric vs batch_size for each kv head, per prompt length
+        # -----------------------
+        for T in sorted(cur["prompt_len"].unique()):
+            sub = cur[cur["prompt_len"] == T].copy()
+            sub = sub[sub[metric].notna()]
+            if sub.empty:
+                continue
+
+            fig = plt.figure()
+            ax = plt.gca()
+
+            for mode in sorted(sub["mode"].unique()):
+                s2 = sub[sub["mode"] == mode].sort_values("batch_size")
+                ax.plot(s2["batch_size"], s2[metric], marker="o", label=mode)
+
+            ax.set_title(f"{phase}: {ylab} vs batch_size (prompt_len={T}){title_suffix}")
+            ax.set_xlabel("batch_size")
+            ax.set_ylabel(ylab)
+            ax.legend()
+
+            out_path = plots_dir / f"{phase}_{metric}_vs_batchsize_T{T}{file_suffix}.png"
+            save_plot(fig, out_path)
+
+        # -----------------------
+        # Plot 3: peak memory vs prompt_len (if present)
+        # -----------------------
+        if "peak_mem_mb" in cur.columns and cur["peak_mem_mb"].notna().any():
+            for B in sorted(cur["batch_size"].unique()):
+                sub = cur[(cur["batch_size"] == B) & (cur["peak_mem_mb"].notna())].copy()
+                if sub.empty:
+                    continue
+
+                fig = plt.figure()
+                ax = plt.gca()
+
+                for mode in sorted(sub["mode"].unique()):
+                    s2 = sub[sub["mode"] == mode].sort_values("prompt_len")
+                    ax.plot(s2["prompt_len"], s2["peak_mem_mb"], marker="o", label=mode)
+
+                ax.set_title(f"{phase}: peak_mem_mb vs prompt_len (batch={B}){title_suffix}")
+                ax.set_xlabel("prompt_len")
+                ax.set_ylabel("peak memory (MB)")
+                ax.legend()
+
+                out_path = plots_dir / f"{phase}_peakmem_vs_promptlen_B{B}{file_suffix}.png"
+                save_plot(fig, out_path)
 
     print(f"Done. Plots in: {plots_dir}")
 

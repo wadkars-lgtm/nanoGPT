@@ -213,6 +213,7 @@ def main() -> None:
         help="Tail N lines of child stdout on success when --debug.",
     )
     ap.add_argument("--stop_on_fail", action="store_true", help="Stop immediately when a child run fails.")
+    ap.add_argument("--ckpt", default=None, help="Path to checkpoint to evaluate (forwarded to batch_infer.py)")
 
     args = ap.parse_args()
 

@@ -84,7 +84,7 @@ cache_prefix = True
 phase = "both"
 
 # nanoGPT-style overrides (CLI: --key=value)
-exec(open("configurator.py").read())
+exec(open("bench/configurator.py").read())
 # -----------------------------------------------------------------------------
 
 phase = str(phase).lower().strip()

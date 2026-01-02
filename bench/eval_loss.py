@@ -4,7 +4,7 @@ import os
 import numpy as np
 import torch
 
-from model import GPT, GPTConfig
+from nanogpt.model import GPT, GPTConfig
 
 
 def load_memmap(data_dir: str):

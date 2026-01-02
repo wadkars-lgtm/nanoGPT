@@ -72,7 +72,7 @@ def main() -> None:
     ap.add_argument("--n_kv_heads", required=True, help="Comma list, e.g. 12,3,1")
     ap.add_argument("--ckpts", required=True, help="Comma list of checkpoint paths")
 
-    ap.add_argument("--eval_script", default="eval_loss.py", help="Path to eval_loss.py")
+    ap.add_argument("--eval_script", default="bench/eval_loss.py", help="Path to eval_loss.py")
     args = ap.parse_args()
 
     labels = [x.strip() for x in args.labels.split(",") if x.strip()]

@@ -1,0 +1,4 @@
+number of parameters: 9.34M
+ckpt=out-attn\gqa_h12_kv3_rope_best.pt
+val_loss=1.474411
+val_ppl=4.3685

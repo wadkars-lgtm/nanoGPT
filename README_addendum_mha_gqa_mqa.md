@@ -57,7 +57,10 @@ nanoGPT typically applies `--key=value` overrides via `configurator.py`.
 
 Run this once to confirm your overrides actually take effect:
 ```bash
+#Absolute pos
 python -m bench.train config/train_shakespeare_char.py --n_head=12 --n_kv_head=3 --max_iters=1
+#Rope based
+python -m bench.train config/train_shakespeare_char.py --n_head=12 --n_kv_head=3 --max_iters=1 --use_rope=True --ckpt_name=ckpt_rope_smoke
 ```
 
 You should see logging that reflects your chosen head counts (or add a one-line print in `train.py` to confirm).
@@ -99,8 +102,22 @@ All commands below keep `n_head=12` and only change `n_kv_head`.
 
 ### 4.1 MHA baseline (12 Q heads / 12 KV heads)
 ```bash
-python python -m bench.train config/train_shakespeare_char.py   --out_dir=out-attn   --ckpt_name=mha_h12_kv12   --n_head=12   --n_kv_head=12
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mha_h12_kv12 `
+  --n_head=12 `
+  --n_kv_head=12 `
+  --use_rope=False
+
 #iter 5000: loss 0.7437, lr 1.000e-04, dt 9499.10ms
+```
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mha_h12_kv12_rope `
+  --n_head=12 `
+  --n_kv_head=12 `
+  --use_rope=True
 ```
 
 **What it does**
@@ -108,9 +125,24 @@ python python -m bench.train config/train_shakespeare_char.py   --out_dir=out-at
 - Saves checkpoints under `out-attn/` with a name prefix that includes `mha_h12_kv12`.
 
 ### 4.2 GQA (example: 12 Q heads / 3 KV heads)
-```bash
-python -m bench.train config/train_shakespeare_char.py   --out_dir=out-attn   --ckpt_name=gqa_h12_kv3   --n_head=12   --n_kv_head=3
-#iter 5000: loss 0.7946, lr 1.000e-04, dt 9521.81ms
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=gqa_h12_kv3 `
+  --n_head=12 `
+  --n_kv_head=3 `
+  --use_rope=False
+  
+  #iter 5000: loss 0.7946, lr 1.000e-04, dt 9521.81ms
+```
+
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=gqa_h12_kv3_rope `
+  --n_head=12 `
+  --n_kv_head=3 `
+  --use_rope=True
 ```
 
 **What it does**
@@ -118,9 +150,25 @@ python -m bench.train config/train_shakespeare_char.py   --out_dir=out-attn   --
 - Smaller KV cache than MHA, and typically better decode efficiency at long context.
 
 ### 4.3 MQA (12 Q heads / 1 KV head)
-```bash
-python -m bench.train config/train_shakespeare_char.py   --out_dir=out-attn   --ckpt_name=mqa_h12_kv1   --n_head=12   --n_kv_head=1
+
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mqa_h12_kv1 `
+  --n_head=12 `
+  --n_kv_head=1 `
+  --use_rope=False
+
 #iter 5000: loss 0.8281, lr 1.000e-04, dt 9220.43ms
+```
+
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mqa_h12_kv1_rope `
+  --n_head=12 `
+  --n_kv_head=1 `
+  --use_rope=True
 ```
 
 **What it does**
@@ -153,8 +201,11 @@ Pick the **best** checkpoint for each attention variant.
 
 ```bash
 python -m bench.eval_loss --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mha_h12_kv12_rope_best.pt --dataset shakespeare_char
 python -m bench.eval_loss --ckpt out-attn/gqa_h12_kv3_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/gqa_h12_kv3_rope_best.pt --dataset shakespeare_char
 python -m bench.eval_loss --ckpt out-attn/mqa_h12_kv1_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mqa_h12_kv1_rope_best.pt --dataset shakespeare_char
 ```
 **What it does**
 - Loads the checkpoint
@@ -226,9 +277,9 @@ This script:
 python -m bench.run_eval_compare `
   --dataset shakespeare_char `
   --out_dir results\gqa `
-  --labels MHA,GQA,MQA `
-  --n_kv_heads 12,3,1 `
-  --ckpts out-attn/mha_h12_kv12_best.pt,out-attn/gqa_h12_kv3_best.pt,out-attn/mqa_h12_kv1_best.pt
+  --labels MHA,MHA_ROPE,GQA,GQA_ROPE,MQA,MQA_ROPE `
+  --n_kv_heads 12,12,3,3,1,1 `
+  --ckpts out-attn/mha_h12_kv12_best.pt,out-attn/mha_h12_kv12_rope_best.pt,out-attn/gqa_h12_kv3_best.pt,out-attn/gqa_h12_kv3_rope_best.pt,out-attn/mqa_h12_kv1_best.pt,out-attn/mqa_h12_kv1_rope_best.pt
 ```
 
 This produces:

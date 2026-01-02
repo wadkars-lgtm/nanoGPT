@@ -16,7 +16,7 @@ from contextlib import nullcontext
 import torch
 import tiktoken
 
-from model import GPTConfig, GPT
+from nanogpt.model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 # Defaults (overridable via configurator.py / CLI)
@@ -50,7 +50,7 @@ prompt_unknown_replacement = " "   # used only if policy == "replace"
 # -----------------------------------------------------------------------------
 # CLI/config overrides (nanoGPT-style)
 # -----------------------------------------------------------------------------
-exec(open("configurator.py").read())
+exec(open("bench/configurator.py").read())
 # -----------------------------------------------------------------------------
 
 def normalize_prompt_text(s: str) -> str:
