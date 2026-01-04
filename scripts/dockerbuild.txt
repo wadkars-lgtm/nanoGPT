@@ -1,0 +1,5 @@
+docker build -t nanogpt:cu128 -f docker/Dockerfile .
+
+docker run --rm -it --gpus all `
+  -v ${PWD}:/workspace `
+  nanogpt:cu128
