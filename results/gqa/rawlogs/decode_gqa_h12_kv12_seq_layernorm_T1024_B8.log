@@ -1,0 +1,25 @@
+Overriding: device = cuda:0
+Overriding: dtype = bfloat16
+Overriding: phase = decode
+Overriding: kv_cache = True
+Overriding: prompt_len = 1024
+Overriding: batch_size = 8
+Overriding: max_new_tokens = 1
+Overriding: warmup_iters = 5
+Overriding: bench_iters = 50
+Overriding: n_head = 12
+Overriding: n_kv_head = 12
+Overriding: ckpt_dir = out-attn
+Overriding: ckpt_name = gqa_h12_kv12_seq_layernorm
+Overriding: use_rope = False
+Overriding: norm_type = layernorm
+Overriding: norm_eps = 1e-05
+Traceback (most recent call last):
+  File "C:\Users\wadka\Documents\GitHub\nanoGPT\bench\batch_infer.py", line 554, in <module>
+    main()
+  File "C:\Users\wadka\Documents\GitHub\nanoGPT\bench\batch_infer.py", line 463, in main
+    model, model_args_used, ckpt = _build_model_from_checkpoint_or_defaults()
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\wadka\Documents\GitHub\nanoGPT\bench\batch_infer.py", line 227, in _build_model_from_checkpoint_or_defaults
+    raise ValueError(
+ValueError: Requested T=1024 + new=1 = 1025 exceeds ckpt block_size=256 and use_rope=False. Train with larger block_size or enable RoPE.

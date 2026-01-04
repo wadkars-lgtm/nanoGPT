@@ -1,0 +1,54 @@
+Overriding: device = cuda:0
+Overriding: dtype = bfloat16
+Overriding: phase = decode
+Overriding: kv_cache = True
+Overriding: prompt_len = 1024
+Overriding: batch_size = 4
+Overriding: max_new_tokens = 1
+Overriding: warmup_iters = 3
+Overriding: bench_iters = 5
+Overriding: n_head = 12
+Overriding: n_kv_head = 12
+Overriding: use_rope = True
+Overriding: norm_type = rmsnorm
+Overriding: norm_eps = 1e-05
+Overriding: ignore_checkpoint = True
+Overriding: allow_unsafe_benchmark = True
+number of parameters: 123.69M
+[INFO] Saved prefix cache: C:\Users\wadka\Documents\GitHub\nanoGPT\bench_prefix\prefix_927a541047db.pt
+Wrote: bench_out\infer_h12_kv12_T1024_B4_KVtrue_Pdecode_rmsnorm_rope.json
+Wrote: raw_logs\infer_h12_kv12_T1024_B4_KVtrue_Pdecode_rmsnorm_rope.log
+params: {
+  "batch_size": 4,
+  "prompt_len": 1024,
+  "max_new_tokens": 1,
+  "kv_cache": true,
+  "phase": "decode",
+  "prefix_source": "random",
+  "prefix_cache_dir": "bench_prefix",
+  "cache_prefix": true,
+  "prefix_seed_len": 1,
+  "compile": false,
+  "allow_unsafe_benchmark": true,
+  "ignore_checkpoint": true,
+  "block_size": 1025,
+  "vocab_size": 50304,
+  "n_layer": 12,
+  "n_head": 12,
+  "n_kv_head": 12,
+  "n_embd": 768,
+  "dropout": 0.0,
+  "bias": true,
+  "use_rope": true,
+  "norm_type": "rmsnorm",
+  "norm_eps": 1e-05,
+  "ckpt_dir": "out-attn",
+  "ckpt_name": ""
+}
+metrics: {
+  "peak_alloc_bytes": 1261937152,
+  "peak_reserved_bytes": 1476395008,
+  "decode_total_ms": 59.776441192626955,
+  "decode_ms_per_tok": 59.776441192626955,
+  "decode_tok_s": 16.730246455103735
+}

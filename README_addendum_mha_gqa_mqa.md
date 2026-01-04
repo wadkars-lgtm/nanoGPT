@@ -723,16 +723,47 @@ pytest -q
 
 2) Train:
 ```bash
-python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --n_head=12 --n_kv_head=12
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --n_head=12 --n_kv_head=12 --max_iters=1000 
 python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --n_head=12 --n_kv_head=3
 python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --n_head=12 --n_kv_head=1
 ```
+
+
+```bash
+#With Layer Norm
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --n_head=12 --n_kv_head=12 --norm_type=layernorm --use_rope=False --block_size=2049
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --n_head=12 --n_kv_head=3 --norm_type=layernorm --use_rope=False --block_size=2049
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --n_head=12 --n_kv_head=1 --norm_type=layernorm --use_rope=False --block_size=2049
+
+#With RMS Norm
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --n_head=12 --n_kv_head=12 --norm_type=rmsnorm --use_rope=False --block_size=2049
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --n_head=12 --n_kv_head=3 --norm_type=rmsnorm --use_rope=False --block_size=2049
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --n_head=12 --n_kv_head=1 --norm_type=rmsnorm --use_rope=False --block_size=2049
+
+
+#With Layer Norm and ROPE
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --n_head=12 --n_kv_head=12 --norm_type=layernorm  --use_rope=True
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --n_head=12 --n_kv_head=3 --norm_type=layernorm  --use_rope=True
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --n_head=12 --n_kv_head=1 --norm_type=layernorm  --use_rope=True
+
+#With RMS Norm and ROPE
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --n_head=12 --n_kv_head=12 --norm_type=rmsnorm  --use_rope=True
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --n_head=12 --n_kv_head=3 --norm_type=rmsnorm  --use_rope=True
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --n_head=12 --n_kv_head=1 --norm_type=rmsnorm  --use_rope=True
+
+```
+
 
 3) Eval:
 ```bash
 python -m bench.eval_loss --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char
 python -m bench.eval_loss --ckpt out-attn/gqa_h12_kv3_best.pt  --dataset shakespeare_char
 python -m bench.eval_loss --ckpt out-attn/mqa_h12_kv1_best.pt  --dataset shakespeare_char
+
+python -m bench.eval_loss --ckpt out-attn/qqa_h12_kv12_rmsnorm_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/gqa_h12_kv3_rmsnorm_best.pt  --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/qqa_h12_kv1_rmsnorm_best.pt  --dataset shakespeare_char
+
 ```
 
 4) Sample (PowerShell):
@@ -740,6 +771,11 @@ python -m bench.eval_loss --ckpt out-attn/mqa_h12_kv1_best.pt  --dataset shakesp
 python -m bench.sample --out_dir=out-attn --ckpt_name=mha_h12_kv12 --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
 python -m bench.sample --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
 python -m bench.sample --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
+
+python -m bench.sample --out_dir=out-attn --ckpt_name=mha_h12_kv12 --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
+python -m bench.sample --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
+python -m bench.sample --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
+
 ```
 
 5) Sweep:
@@ -747,10 +783,25 @@ python -m bench.sample --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --dataset=sha
 python -m bench.sweep_n_kv_head --script=batch_infer.py --phase=decode --kv_cache=true   --n_head=12 --n_kv_heads=12,6,4,3,2,1 --prompt_lens=128,512,1024,2048 --batch_sizes=1,4,8,16,32
 ```
 
+```bash
+
+python -m bench.sweep_n_kv_head --out_csv results/gqa --script=bench\batch_infer.py --phase=decode --kv_cache=true --max_new_tokens=32  --warmup_iters=3 --bench_iters=5 --n_head=12 --n_kv_heads=12,6,4,3,2,1 --prompt_lens=128,512,1024,2048 --batch_sizes=1,4,8,16,32 --norm_type=rmsnorm --use_rope=True --ignore_checkpoint=true --allow_unsafe_benchmark=true 
+python -m bench.sweep_n_kv_head --out_csv results/gqa --script=bench\batch_infer.py --phase=decode --kv_cache=true  --max_new_tokens=32 --warmup_iters=3 --bench_iters=5 --n_head=12 --n_kv_heads=12,6,4,3,2,1 --prompt_lens=128,512,1024,2048 --batch_sizes=1,4,8,16,32 --norm_type=layernorm --use_rope=True --ignore_checkpoint=true   --allow_unsafe_benchmark=true 
+
+```
+
 6) Plot:
 ```bash
-python -m bench.plot_sweep --csv results/gqa/sweep.csv --write_parsed_csv
+python -m bench.plot_sweep --csv results/gqa/sweep_rmsnorm_norope.csv --write_parsed_csv --norm_type=rmsnorm --use_rope=False
+python -m bench.plot_sweep --csv results/gqa/sweep_layernorm_norope.csv --write_parsed_csv --norm_type=layernorm --use_rope=False
+
+python -m bench.plot_sweep --csv results/gqa/sweep_rmsnorm_rope.csv --write_parsed_csv --norm_type=rmsnorm --use_rope=True
+python -m bench.plot_sweep --csv results/gqa/sweep_layernorm_rope.csv --write_parsed_csv --norm_type=layernorm --use_rope=True
+
 ```
+
+```bash
+python -m bench.plot_sweep --csv results/gqa/sweep.csv --write_parsed_csv --norm_type=layernorm --use_rope=False
 ```
 ---
 

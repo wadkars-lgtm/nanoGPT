@@ -1,0 +1,53 @@
+Overriding: device = cuda:0
+Overriding: dtype = bfloat16
+Overriding: phase = decode
+Overriding: kv_cache = True
+Overriding: prompt_len = 2048
+Overriding: batch_size = 8
+Overriding: max_new_tokens = 32
+Overriding: warmup_iters = 1
+Overriding: bench_iters = 2
+Overriding: n_head = 12
+Overriding: n_kv_head = 6
+Overriding: use_rope = False
+Overriding: norm_type = rmsnorm
+Overriding: norm_eps = 1e-05
+Overriding: ignore_checkpoint = True
+Overriding: allow_unsafe_benchmark = True
+number of parameters: 116.60M
+Wrote: bench_out\infer_h12_kv6_T2048_B8_KVtrue_Pdecode_rmsnorm_norope.json
+Wrote: raw_logs\infer_h12_kv6_T2048_B8_KVtrue_Pdecode_rmsnorm_norope.log
+params: {
+  "batch_size": 8,
+  "prompt_len": 2048,
+  "max_new_tokens": 32,
+  "kv_cache": true,
+  "phase": "decode",
+  "prefix_source": "random",
+  "prefix_cache_dir": "bench_prefix",
+  "cache_prefix": true,
+  "prefix_seed_len": 1,
+  "compile": false,
+  "allow_unsafe_benchmark": true,
+  "ignore_checkpoint": true,
+  "block_size": 2080,
+  "vocab_size": 50304,
+  "n_layer": 12,
+  "n_head": 12,
+  "n_kv_head": 6,
+  "n_embd": 768,
+  "dropout": 0.0,
+  "bias": true,
+  "use_rope": false,
+  "norm_type": "rmsnorm",
+  "norm_eps": 1e-05,
+  "ckpt_dir": "out-attn",
+  "ckpt_name": ""
+}
+metrics: {
+  "peak_alloc_bytes": 1816725504,
+  "peak_reserved_bytes": 2308964352,
+  "decode_total_ms": 760.3099060058594,
+  "decode_ms_per_tok": 23.759684562683105,
+  "decode_tok_s": 42.095462635160665
+}

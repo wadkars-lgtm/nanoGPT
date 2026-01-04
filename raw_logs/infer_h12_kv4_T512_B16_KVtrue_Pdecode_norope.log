@@ -1,0 +1,40 @@
+Wrote: bench_out\infer_h12_kv4_T512_B16_KVtrue_Pdecode_norope.json
+Log:   raw_logs\infer_h12_kv4_T512_B16_KVtrue_Pdecode_norope.log
+
+params:
+{
+  "batch_size": 16,
+  "prompt_len": 512,
+  "max_new_tokens": 32,
+  "kv_cache": true,
+  "phase": "decode",
+  "prefix_source": "random",
+  "prefix_cache_dir": "bench_prefix",
+  "cache_prefix": true,
+  "prefix_seed_len": 1,
+  "compile": false,
+  "allow_unsafe_benchmark": true,
+  "ignore_checkpoint": true,
+  "block_size": 544,
+  "vocab_size": 50304,
+  "n_layer": 12,
+  "n_head": 12,
+  "n_kv_head": 4,
+  "n_embd": 768,
+  "dropout": 0.0,
+  "bias": true,
+  "use_rope": false,
+  "norm_type": "layernorm",
+  "norm_eps": 1e-05,
+  "ckpt_dir": "out-attn",
+  "ckpt_name": ""
+}
+
+metrics:
+{
+  "peak_alloc_bytes": 1005926400,
+  "peak_reserved_bytes": 1216348160,
+  "decode_total_ms": 351.27099609375,
+  "decode_ms_per_tok": 10.977218627929688,
+  "decode_tok_s": 91.74738177909836
+}

@@ -9,9 +9,14 @@ Overriding: warmup_iters = 5
 Overriding: bench_iters = 50
 Overriding: n_head = 12
 Overriding: n_kv_head = 12
+Setting new config key: ckpt_dir = out-attn
+Setting new config key: ckpt_name = mha_h12_kv12
+Overriding: norm_type = layernorm
+Overriding: norm_eps = 1e-05
 number of parameters: 123.59M
-[INFO] Saved prefix cache: C:\Users\wadka\Documents\GitHub\nanoGPT\bench_prefix\prefix_d9bdc06dc7dc.pt
+[INFO] Saved prefix cache: C:\Users\wadka\Documents\GitHub\nanoGPT\bench_prefix\prefix_cb8cd1461c8f.pt
 Wrote: bench_out\infer_h12_kv12_T512_B8_KVtrue_Pdecode.json
+Wrote: raw_logs\infer_h12_kv12_T512_B8_KVtrue_Pdecode.log
 params: {
   "batch_size": 8,
   "prompt_len": 512,
@@ -27,12 +32,14 @@ params: {
   "n_kv_head": 12,
   "n_embd": 768,
   "vocab_size": 50304,
-  "compile": false
+  "compile": false,
+  "norm_type": "layernorm",
+  "norm_eps": 1e-05
 }
 metrics: {
   "peak_alloc_bytes": 1114471424,
   "peak_reserved_bytes": 1308622848,
-  "decode_total_ms": 53.70251655578613,
-  "decode_ms_per_tok": 53.70251655578613,
-  "decode_tok_s": 18.71188029975369
+  "decode_total_ms": 53.299225616455075,
+  "decode_ms_per_tok": 53.299225616455075,
+  "decode_tok_s": 18.84223166015331
 }

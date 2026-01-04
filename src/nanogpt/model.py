@@ -7,6 +7,7 @@ This version adds:
   3) **use_sdpa** knob for deterministic tests (disable SDPA) or fast path (enable SDPA).
   4) **Sliding Window Attention (SWA)** via config.sliding_window_size (mask-only SWA).
   5) **RoPE (Rotary Positional Embeddings)** via config.use_rope (flagged, optional).
+  6) **Configurable normalization**: LayerNorm vs RMSNorm via config.norm_type.
 
 SWA semantics (mask-only, no KV eviction):
   - Attention is restricted to the last W tokens for each query position.
@@ -67,13 +68,72 @@ from torch.nn import functional as F
 class LayerNorm(nn.Module):
     """LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False"""
 
-    def __init__(self, ndim: int, bias: bool):
+    def __init__(self, ndim: int, bias: bool, eps: float = 1e-5):
         super().__init__()
         self.weight = nn.Parameter(torch.ones(ndim))
         self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+        self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return F.layer_norm(x, self.weight.shape, self.weight, self.bias, 1e-5)
+        return F.layer_norm(x, self.weight.shape, self.weight, self.bias, self.eps)
+
+
+class RMSNorm(nn.Module):
+    """RMSNorm with optional bias (most RMSNorm impls omit bias)."""
+
+    def __init__(self, ndim: int, bias: bool, eps: float = 1e-5):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Prefer fused RMSNorm if available
+
+        if hasattr(F, "rms_norm"):
+            y = F.rms_norm(x, self.weight.shape, self.weight, self.eps)
+            if self.bias is not None:
+                y = y + self.bias
+            return y
+        else:
+            # Fallback: manual RMSNorm, written to be more GPU-friendly
+            # Use rsqrt and multiply (better than sqrt + divide)
+            rms_inv = torch.rsqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
+            y = x * rms_inv
+            y = y * self.weight
+            if self.bias is not None:
+                y = y + self.bias
+            return y
+    '''
+    #Slower launches more kernels 
+    #The alternative uses fused kernels
+    How to verify this is the real cause (quick sanity)
+
+    #Run Nsight Systems on a tiny decode loop and compare:
+
+    #LayerNorm: you’ll often see 1 kernel call per norm
+    #Your RMSNorm: you’ll see a pile of elementwise kernels
+    #The better RMSNorm trace should collapse to fewer kernels, 
+    #and your ms/token gap should shrink or flip.
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Normalize only by RMS over the last dimension (no mean subtraction).
+        
+        rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).sqrt()
+        y = x / rms
+        y = y * self.weight
+        if self.bias is not None:
+            y = y + self.bias
+        return y
+    '''
+
+def make_norm(config: "GPTConfig") -> nn.Module:
+    nt = str(getattr(config, "norm_type", "layernorm")).lower()
+    eps = float(getattr(config, "norm_eps", 1e-5))
+    if nt == "layernorm":
+        return LayerNorm(config.n_embd, bias=config.bias, eps=eps)
+    if nt == "rmsnorm":
+        return RMSNorm(config.n_embd, bias=config.bias, eps=eps)
+    raise ValueError(f"unknown norm_type={nt!r}. expected 'layernorm' or 'rmsnorm'")
 
 
 class CausalSelfAttention(nn.Module):
@@ -146,7 +206,6 @@ class CausalSelfAttention(nn.Module):
         returns cos, sin: each (1, 1, T, rope_dim/2) in `dtype`
         """
         inv_freq = self.rope_inv_freq.to(device=device)  # float32 buffer on device
-        # angles: (T, rope_dim/2) in float32 for stability
         angles = torch.outer(pos.to(torch.float32), inv_freq)  # (T, rope_dim/2)
         cos = angles.cos().to(dtype=dtype)
         sin = angles.sin().to(dtype=dtype)
@@ -174,14 +233,14 @@ class CausalSelfAttention(nn.Module):
 
         B, H, T, D = x.shape
         rd = self.rope_dim
-        x_rope = x[..., :rd]              # (B,H,T,rd)
-        x_pass = x[..., rd:]              # (B,H,T,D-rd)
+        x_rope = x[..., :rd]  # (B,H,T,rd)
+        x_pass = x[..., rd:]  # (B,H,T,D-rd)
 
         cos, sin = self._rope_cos_sin(pos, device=x.device, dtype=x.dtype)  # (1,1,T,rd/2)
 
-        # reshape x_rope into pairs via rotate_half trick
-        # cos/sin broadcast over B,H
-        x_out = (x_rope * cos.repeat_interleave(2, dim=-1)) + (self._rotate_half(x_rope) * sin.repeat_interleave(2, dim=-1))
+        x_out = (x_rope * cos.repeat_interleave(2, dim=-1)) + (
+            self._rotate_half(x_rope) * sin.repeat_interleave(2, dim=-1)
+        )
 
         if x_pass.numel() == 0:
             return x_out
@@ -197,9 +256,9 @@ class CausalSelfAttention(nn.Module):
         Boolean mask (T_new, T_total) where True means "allowed".
         Allowed condition: j <= past_len + i
         """
-        i = torch.arange(T_new, device=device)[:, None]          # (T_new, 1)
-        j = torch.arange(T_total, device=device)[None, :]        # (1, T_total)
-        return j <= (past_len + i)                               # (T_new, T_total)
+        i = torch.arange(T_new, device=device)[:, None]  # (T_new, 1)
+        j = torch.arange(T_total, device=device)[None, :]  # (1, T_total)
+        return j <= (past_len + i)  # (T_new, T_total)
 
     def _build_offset_causal_mask_additive(
         self, T_new: int, T_total: int, past_len: int, device, dtype
@@ -227,8 +286,8 @@ class CausalSelfAttention(nn.Module):
 
         If sliding_window_size is None => only causal.
         """
-        i = torch.arange(T_new, device=device)[:, None]          # (T_new, 1)
-        j = torch.arange(T_total, device=device)[None, :]        # (1, T_total)
+        i = torch.arange(T_new, device=device)[:, None]  # (T_new, 1)
+        j = torch.arange(T_total, device=device)[None, :]  # (1, T_total)
 
         causal_allowed = j <= (past_len + i)
 
@@ -289,14 +348,14 @@ class CausalSelfAttention(nn.Module):
         hd = self.head_dim
 
         # Projections
-        q = self.c_q(x)                                # (B, T_new, n_embd)
-        kv = self.c_kv(x)                              # (B, T_new, 2*(n_kv_head*hd))
-        k, v = kv.split(kv.size(-1) // 2, dim=2)        # each (B, T_new, n_kv_head*hd)
+        q = self.c_q(x)  # (B, T_new, n_embd)
+        kv = self.c_kv(x)  # (B, T_new, 2*(n_kv_head*hd))
+        k, v = kv.split(kv.size(-1) // 2, dim=2)  # each (B, T_new, n_kv_head*hd)
 
         # Shape into heads
-        q = q.view(B, T_new, self.n_head, hd).transpose(1, 2)          # (B, n_head, T_new, hd)
-        k = k.view(B, T_new, self.n_kv_head, hd).transpose(1, 2)       # (B, n_kv_head, T_new, hd)
-        v = v.view(B, T_new, self.n_kv_head, hd).transpose(1, 2)       # (B, n_kv_head, T_new, hd)
+        q = q.view(B, T_new, self.n_head, hd).transpose(1, 2)  # (B, n_head, T_new, hd)
+        k = k.view(B, T_new, self.n_kv_head, hd).transpose(1, 2)  # (B, n_kv_head, T_new, hd)
+        v = v.view(B, T_new, self.n_kv_head, hd).transpose(1, 2)  # (B, n_kv_head, T_new, hd)
 
         past_len = 0
         if past_kv is not None:
@@ -308,8 +367,6 @@ class CausalSelfAttention(nn.Module):
         # RoPE: apply to q and the *new* k using absolute positions for this call.
         # IMPORTANT: cached k_past is assumed already RoPE-rotated from earlier calls.
         if self.use_rope:
-            # In current design (no eviction), pos_offset should equal past_len.
-            # We accept pos_offset explicitly so you can decouple later.
             pos = torch.arange(pos_offset, pos_offset + T_new, device=x.device, dtype=torch.long)  # (T_new,)
             q = self._apply_rope(q, pos)
             k = self._apply_rope(k, pos)
@@ -339,7 +396,9 @@ class CausalSelfAttention(nn.Module):
                     T_new, T_total, past_len, device=x.device, dtype=q.dtype
                 )
                 y = F.scaled_dot_product_attention(
-                    q, kq, vq,
+                    q,
+                    kq,
+                    vq,
                     attn_mask=attn_mask,
                     dropout_p=self.dropout if self.training else 0.0,
                     is_causal=False,
@@ -351,7 +410,9 @@ class CausalSelfAttention(nn.Module):
                         T_new, T_total, past_len, device=x.device, dtype=q.dtype
                     )
                     y = F.scaled_dot_product_attention(
-                        q, kq, vq,
+                        q,
+                        kq,
+                        vq,
                         attn_mask=attn_mask,
                         dropout_p=self.dropout if self.training else 0.0,
                         is_causal=False,
@@ -361,7 +422,9 @@ class CausalSelfAttention(nn.Module):
                     # decode-step with past => is_causal=False is safe
                     is_causal = (past_kv is None)
                     y = F.scaled_dot_product_attention(
-                        q, kq, vq,
+                        q,
+                        kq,
+                        vq,
                         attn_mask=None,
                         dropout_p=self.dropout if self.training else 0.0,
                         is_causal=is_causal,
@@ -416,9 +479,9 @@ class MLP(nn.Module):
 class Block(nn.Module):
     def __init__(self, config: "GPTConfig"):
         super().__init__()
-        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_1 = make_norm(config)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.ln_2 = make_norm(config)
         self.mlp = MLP(config)
 
     def forward(
@@ -453,6 +516,10 @@ class GPTConfig:
     rope_theta: float = 10000.0
     rope_dim: Optional[int] = None  # None => head_dim (full rotary)
 
+    # Norm selection
+    norm_type: str = "layernorm"  # "layernorm" | "rmsnorm"
+    norm_eps: float = 1e-5
+
     dropout: float = 0.0
     bias: bool = True
     use_sdpa: bool = True
@@ -473,6 +540,10 @@ class GPTConfig:
             assert 0 < rd <= head_dim, "rope_dim must be in (0, head_dim]"
             assert rd % 2 == 0, "rope_dim must be even"
 
+        self.norm_type = str(self.norm_type).lower()
+        assert self.norm_type in {"layernorm", "rmsnorm"}, "norm_type must be 'layernorm' or 'rmsnorm'"
+        assert isinstance(self.norm_eps, float) and self.norm_eps > 0
+
 
 class GPT(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -491,7 +562,7 @@ class GPT(nn.Module):
                 wpe=wpe,
                 drop=nn.Dropout(config.dropout),
                 h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-                ln_f=LayerNorm(config.n_embd, bias=config.bias),
+                ln_f=make_norm(config),
             )
         )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -511,7 +582,6 @@ class GPT(nn.Module):
     def get_num_params(self, non_embedding: bool = True) -> int:
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
-            # ModuleDict supports "in" for key membership
             if "wpe" in self.transformer and isinstance(self.transformer["wpe"], nn.Embedding):
                 n_params -= self.transformer["wpe"].weight.numel()
         return n_params
@@ -576,8 +646,6 @@ class GPT(nn.Module):
 
         for i, block in enumerate(self.transformer.h):
             layer_past = past_kv[i] if use_cache else None
-            # For RoPE, pos_offset is the absolute starting position for this chunk.
-            # In current (no eviction) design, pos_offset == T_past.
             x, pkv = block(x, use_cache=use_cache, past_kv=layer_past, pos_offset=T_past)
             if use_cache:
                 present.append(pkv)
@@ -621,7 +689,7 @@ class GPT(nn.Module):
           - Supported ONLY for:
               * absolute position embeddings (use_rope=False)
               * MHA (n_kv_head == n_head)
-          - If you want RoPE, you must train/fine-tune a RoPE model (not provided here).
+              * LayerNorm (norm_type == "layernorm")
         """
         assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
         override_args = override_args or {}
@@ -646,6 +714,9 @@ class GPT(nn.Module):
         config_args["n_kv_head"] = config_args["n_head"]
         # RoPE disabled for GPT-2 loading
         config_args["use_rope"] = False
+        # LN only for GPT-2 reproduction
+        config_args["norm_type"] = "layernorm"
+        config_args["norm_eps"] = 1e-5
 
         if "dropout" in override_args:
             print(f"overriding dropout rate to {override_args['dropout']}")
@@ -689,11 +760,19 @@ class GPT(nn.Module):
             # MLP (Conv1D weights need transpose)
             _copy(f"transformer.h.{i}.mlp.c_fc.weight", f"transformer.h.{i}.mlp.c_fc.weight", transpose_if_needed=True)
             _copy(f"transformer.h.{i}.mlp.c_fc.bias", f"transformer.h.{i}.mlp.c_fc.bias")
-            _copy(f"transformer.h.{i}.mlp.c_proj.weight", f"transformer.h.{i}.mlp.c_proj.weight", transpose_if_needed=True)
+            _copy(
+                f"transformer.h.{i}.mlp.c_proj.weight",
+                f"transformer.h.{i}.mlp.c_proj.weight",
+                transpose_if_needed=True,
+            )
             _copy(f"transformer.h.{i}.mlp.c_proj.bias", f"transformer.h.{i}.mlp.c_proj.bias")
 
             # Attention output proj (Conv1D weight needs transpose)
-            _copy(f"transformer.h.{i}.attn.c_proj.weight", f"transformer.h.{i}.attn.c_proj.weight", transpose_if_needed=True)
+            _copy(
+                f"transformer.h.{i}.attn.c_proj.weight",
+                f"transformer.h.{i}.attn.c_proj.weight",
+                transpose_if_needed=True,
+            )
             _copy(f"transformer.h.{i}.attn.c_proj.bias", f"transformer.h.{i}.attn.c_proj.bias")
 
             # Attention QKV mapping:
@@ -716,8 +795,8 @@ class GPT(nn.Module):
                 sd[f"transformer.h.{i}.attn.c_q.weight"].copy_(w_q)
                 sd[f"transformer.h.{i}.attn.c_q.bias"].copy_(b_q)
 
-                w_kv = torch.cat([w_k, w_v], dim=0)   # (2*n_embd, n_embd)
-                b_kv = torch.cat([b_k, b_v], dim=0)   # (2*n_embd,)
+                w_kv = torch.cat([w_k, w_v], dim=0)  # (2*n_embd, n_embd)
+                b_kv = torch.cat([b_k, b_v], dim=0)  # (2*n_embd,)
                 sd[f"transformer.h.{i}.attn.c_kv.weight"].copy_(w_kv)
                 sd[f"transformer.h.{i}.attn.c_kv.bias"].copy_(b_kv)
 

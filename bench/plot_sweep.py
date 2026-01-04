@@ -9,7 +9,7 @@ Inputs:
 
 Outputs:
   - results/gqa/plots/*.png
-  - results/gqa/parsed.csv   (optional, handy for debugging)
+  - results/gqa/parsed_<norm>_<rope>.csv   (optional, handy for debugging)
 
 This script does NOT run any CUDA. It only parses logs + plots.
 
@@ -19,11 +19,17 @@ Robustness:
 - Fallback to regex parsing of the log text.
 
 RoPE note:
-- If your sweep includes BOTH use_rope=True and use_rope=False, plots can get overwritten
-  unless we separate them. This script will:
-    (1) split plots per use_rope value (if present in sweep.csv)
-    (2) add a suffix (_rope / _norope) to filenames
-    (3) include RoPE/NoRoPE in legend labels
+- You can filter plots to a specific RoPE mode via --use_rope (true|false).
+- If you DO NOT pass --use_rope, plots are split per use_rope value (if present).
+- Output filenames ALWAYS include both norm + rope suffixes:
+    ..._layernorm_rope.png / ..._layernorm_norope.png
+    ..._rmsnorm_rope.png / ..._rmsnorm_norope.png
+
+Norm note:
+- You can filter plots to a specific norm type (layernorm or rmsnorm) via --norm_type.
+- Norm type is taken from JSON params.norm_type when available.
+- Fallback inference: if the JSON artifact filename contains 'rmsnorm', we treat it as rmsnorm,
+  else layernorm.
 """
 
 from __future__ import annotations
@@ -33,9 +39,8 @@ import json
 import re
 from pathlib import Path
 
-import pandas as pd
 import matplotlib.pyplot as plt
-
+import pandas as pd
 
 # -----------------------
 # JSON artifact detection
@@ -71,6 +76,19 @@ METRIC_REGEX = {
 }
 
 
+def _parse_boolish(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(int(v))
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "y", "t", "on"):
+        return True
+    if s in ("0", "false", "no", "n", "f", "off"):
+        return False
+    raise ValueError(f"Cannot parse bool from: {v!r}")
+
+
 def first_match(text: str, patterns: list[re.Pattern]) -> float | None:
     for pat in patterns:
         m = pat.search(text)
@@ -91,10 +109,20 @@ def _to_mb(x_bytes: int | float | None) -> float | None:
         return None
 
 
+def _norm_from_path(p: Path) -> str:
+    s = str(p).lower()
+    return "rmsnorm" if "rmsnorm" in s else "layernorm"
+
+
 def parse_metrics_from_json_artifact(log_text: str, log_path: Path) -> dict:
     """
     If the log contains:  Wrote: <path-to-json>
     load that JSON and return a normalized metric dict.
+
+    Also attempts to pull:
+      - phase (params.phase)
+      - use_rope (params.use_rope)
+      - norm_type (params.norm_type)
     """
     m = WROTE_JSON_RE.search(log_text)
     if not m:
@@ -125,7 +153,7 @@ def parse_metrics_from_json_artifact(log_text: str, log_path: Path) -> dict:
     metrics = data.get("metrics", {}) if isinstance(data, dict) else {}
     params = data.get("params", {}) if isinstance(data, dict) else {}
 
-    out: dict[str, float | None] = {}
+    out: dict[str, float | str | bool | None] = {}
 
     # decode
     if "decode_ms_per_tok" in metrics:
@@ -150,9 +178,20 @@ def parse_metrics_from_json_artifact(log_text: str, log_path: Path) -> dict:
     elif peak_reserved_bytes is not None:
         out["peak_mem_mb"] = _to_mb(float(peak_reserved_bytes))
 
-    # optional
+    # optional: phase, rope, norm
     if "phase" in params:
-        out["phase_from_json"] = params["phase"]
+        out["phase_from_json"] = str(params["phase"])
+
+    if "use_rope" in params:
+        out["use_rope_from_json"] = params["use_rope"]
+
+    if "norm_type" in params:
+        out["norm_type"] = str(params["norm_type"]).strip().lower()
+    else:
+        out["norm_type"] = _norm_from_path(p)
+
+    # keep the json path around (useful for debugging)
+    out["json_path"] = str(p)
 
     return out
 
@@ -166,12 +205,12 @@ def parse_log(log_path: Path) -> dict:
         return out
 
     # 2) Fallback to regex parsing the log itself
-    out = {}
+    out2: dict[str, float | str | None] = {}
     for k, pats in METRIC_REGEX.items():
-        out[k] = first_match(txt, pats)
+        out2[k] = first_match(txt, pats)
 
-    peak_alloc = out.get("peak_alloc_bytes")
-    peak_res = out.get("peak_reserved_bytes")
+    peak_alloc = out2.get("peak_alloc_bytes")
+    peak_res = out2.get("peak_reserved_bytes")
 
     peak_mem_mb = None
     if peak_alloc is not None:
@@ -179,8 +218,17 @@ def parse_log(log_path: Path) -> dict:
     elif peak_res is not None:
         peak_mem_mb = _to_mb(peak_res)
 
-    out["peak_mem_mb"] = peak_mem_mb
-    return out
+    out2["peak_mem_mb"] = peak_mem_mb
+
+    # best-effort inference for norm + rope
+    out2["norm_type"] = _norm_from_path(log_path)
+    s = str(log_path).lower()
+    if "_rope_" in s or s.endswith("_rope.log"):
+        out2["use_rope_from_json"] = True
+    if "_seq_" in s or s.endswith("_seq.log") or "_norope" in s:
+        out2["use_rope_from_json"] = False
+
+    return out2
 
 
 def kv_label(n_head: int, n_kv_head: int) -> str:
@@ -192,18 +240,17 @@ def kv_label(n_head: int, n_kv_head: int) -> str:
 
 
 def rope_suffix(use_rope_val) -> str:
-    # use_rope might be bool, int, or string depending on how csv got written
     if isinstance(use_rope_val, bool):
         return "rope" if use_rope_val else "norope"
     s = str(use_rope_val).strip().lower()
-    return "rope" if s in ("1", "true", "yes", "y", "t") else "norope"
+    return "rope" if s in ("1", "true", "yes", "y", "t", "on") else "norope"
 
 
 def rope_tag(use_rope_val) -> str:
     return "RoPE" if rope_suffix(use_rope_val) == "rope" else "NoRoPE"
 
 
-def save_plot(fig, out_path: Path):
+def save_plot(fig, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
     fig.savefig(out_path, dpi=160)
@@ -240,12 +287,28 @@ def pick_metric_and_label(pdf: pd.DataFrame) -> tuple[str, str, str]:
     )
 
 
-def main():
+def _norm_file_suffix(norm_type: str) -> str:
+    """
+    ALWAYS include norm in filenames to avoid overwrites and make folders self-describing.
+    """
+    nt = str(norm_type).strip().lower()
+    if nt not in ("layernorm", "rmsnorm"):
+        raise ValueError(f"unknown norm_type={norm_type}")
+    return f"_{nt}"
+
+
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default="results/gqa/sweep.csv")
     ap.add_argument("--plots_dir", default="results/gqa/plots")
     ap.add_argument("--write_parsed_csv", action="store_true")
-    
+    ap.add_argument("--norm_type", default="layernorm", choices=["layernorm", "rmsnorm"])
+    ap.add_argument(
+        "--use_rope",
+        default=None,
+        help="Optional filter: true|false. If omitted, plots are split per use_rope (if present).",
+    )
+
     args = ap.parse_args()
 
     csv_path = Path(args.csv)
@@ -266,9 +329,19 @@ def main():
         log_path = Path(r["log_path"])
         if not log_path.exists():
             continue
+
         metrics = parse_log(log_path)
         merged = dict(r)
         merged.update(metrics)
+
+        # If JSON included phase/use_rope, prefer that
+        if "phase_from_json" in merged and "phase" in merged:
+            merged["phase"] = merged["phase_from_json"]
+
+        # if we got rope from json, populate/override use_rope in frame
+        if "use_rope_from_json" in merged:
+            merged["use_rope"] = merged["use_rope_from_json"]
+
         rows.append(merged)
 
     if not rows:
@@ -281,47 +354,88 @@ def main():
 
     pdf = pd.DataFrame(rows)
 
-    # Optional debug CSV (great for sanity checking extraction)
+    # -----------------------
+    # Filter by norm type
+    # -----------------------
+    wanted_norm = str(args.norm_type).strip().lower()
+    if "norm_type" not in pdf.columns:
+        raise RuntimeError(
+            "norm_type not found in parsed data. "
+            "Ensure batch_infer.py writes params.norm_type into the JSON artifacts, "
+            "or encode rmsnorm in the artifact filename (contains 'rmsnorm')."
+        )
+
+    pdf["norm_type"] = pdf["norm_type"].fillna("layernorm").astype(str).str.lower()
+    pdf = pdf[pdf["norm_type"] == wanted_norm].copy()
+
+    if pdf.empty:
+        raise RuntimeError(
+            f"No rows remain after filtering to norm_type={wanted_norm}. "
+            "Confirm you ran the sweep with that norm_type and that logs point to JSON artifacts."
+        )
+
+    # -----------------------
+    # Ensure use_rope is present + optionally filter it
+    # -----------------------
+    if "use_rope" not in pdf.columns:
+        raise RuntimeError(
+            "use_rope not found in parsed data. "
+            "Ensure batch_infer.py writes params.use_rope into the JSON artifacts "
+            "or sweep_n_kv_head.py records use_rope in sweep.csv."
+        )
+
+    # Normalize to bool for consistent grouping/filtering
+    pdf["use_rope_bool"] = pdf["use_rope"].apply(_parse_boolish)
+
+    wanted_rope: bool | None = None
+    if args.use_rope is not None:
+        wanted_rope = _parse_boolish(args.use_rope)
+        pdf = pdf[pdf["use_rope_bool"] == wanted_rope].copy()
+        if pdf.empty:
+            raise RuntimeError(f"No rows remain after filtering to use_rope={wanted_rope} and norm_type={wanted_norm}.")
+
+    # Decide rope groups:
+    # - if --use_rope provided => one group
+    # - else => split groups
+    if wanted_rope is not None:
+        rope_groups = [wanted_rope]
+    else:
+        rope_groups = sorted(pdf["use_rope_bool"].unique().tolist(), key=lambda v: rope_suffix(v))
+
+    # Optional debug CSV(s)
     if args.write_parsed_csv:
-        out_parsed = csv_path.parent / "parsed.csv"
-        pdf.to_csv(out_parsed, index=False)
-        print(f"Wrote parsed table: {out_parsed}")
+        for rv in rope_groups:
+            sub = pdf[pdf["use_rope_bool"] == rv].copy()
+            if sub.empty:
+                continue
+            out_parsed = csv_path.parent / f"parsed_{wanted_norm}_{rope_suffix(rv)}.csv"
+            sub.to_csv(out_parsed, index=False)
+            print(f"Wrote parsed table: {out_parsed}")
 
-    # Determine if we need to split by RoPE
-    split_by_rope = "use_rope" in pdf.columns and pdf["use_rope"].nunique(dropna=False) > 1
-
-    # Helper to add legend mode label
     def add_mode_col(frame: pd.DataFrame) -> pd.DataFrame:
-        if "use_rope" in frame.columns:
-            frame["mode"] = frame.apply(
-                lambda x: f"{kv_label(int(x['n_head']), int(x['n_kv_head']))} [{rope_tag(x['use_rope'])}]",
-                axis=1,
-            )
-        else:
-            frame["mode"] = frame.apply(lambda x: kv_label(int(x["n_head"]), int(x["n_kv_head"])), axis=1)
+        frame["mode"] = frame.apply(
+            lambda x: f"{kv_label(int(x['n_head']), int(x['n_kv_head']))} [{rope_tag(x['use_rope_bool'])}]",
+            axis=1,
+        )
         return frame
 
-    # Plot per rope group if needed; else just once.
-    rope_groups = [None]
-    if split_by_rope:
-        rope_groups = sorted(pdf["use_rope"].unique().tolist(), key=lambda v: rope_suffix(v))
+    norm_title = "RMSNorm" if wanted_norm == "rmsnorm" else "LayerNorm"
+    norm_file_suffix = _norm_file_suffix(wanted_norm)  # ALWAYS explicit
 
     for rope_val in rope_groups:
-        if rope_val is None:
-            cur = pdf.copy()
-            file_suffix = ""
-            title_suffix = ""
-        else:
-            cur = pdf[pdf["use_rope"] == rope_val].copy()
-            file_suffix = f"_{rope_suffix(rope_val)}"
-            title_suffix = f" ({rope_tag(rope_val)})"
-
+        cur = pdf[pdf["use_rope_bool"] == rope_val].copy()
         if cur.empty:
             continue
+
+        rope_file_suffix = f"_{rope_suffix(rope_val)}"  # ALWAYS explicit
+        rope_title_suffix = f" ({rope_tag(rope_val)})"
 
         cur = add_mode_col(cur)
 
         phase, metric, ylab = pick_metric_and_label(cur)
+
+        title_suffix = f" [{norm_title}]{rope_title_suffix}"
+        file_suffix = f"{norm_file_suffix}{rope_file_suffix}"
 
         print(f"Using metric: {metric} ({ylab}){title_suffix}")
         print(f"Rows with metric present: {cur[metric].notna().sum()} / {len(cur)}")
