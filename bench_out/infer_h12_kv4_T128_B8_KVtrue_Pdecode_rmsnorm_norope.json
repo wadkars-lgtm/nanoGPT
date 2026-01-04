@@ -5,7 +5,7 @@
     "torch_version": "2.9.1+cu128",
     "cuda": "12.8",
     "gpu_name": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
-    "time_unix": 1767564950.9276698
+    "time_unix": 1767567145.521693
   },
   "params": {
     "batch_size": 8,
@@ -37,8 +37,8 @@
   "metrics": {
     "peak_alloc_bytes": 559470592,
     "peak_reserved_bytes": 566231040,
-    "decode_total_ms": 140.1571044921875,
-    "decode_ms_per_tok": 4.379909515380859,
-    "decode_tok_s": 228.31548902328592
+    "decode_total_ms": 141.55177307128906,
+    "decode_ms_per_tok": 4.423492908477783,
+    "decode_tok_s": 226.09552445566013
   }
 }

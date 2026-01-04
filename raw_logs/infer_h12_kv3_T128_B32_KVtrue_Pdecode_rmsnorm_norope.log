@@ -34,7 +34,7 @@ metrics:
 {
   "peak_alloc_bytes": 712283136,
   "peak_reserved_bytes": 796917760,
-  "decode_total_ms": 186.46550750732422,
-  "decode_ms_per_tok": 5.827047109603882,
-  "decode_tok_s": 171.6171081180188
+  "decode_total_ms": 184.63040161132812,
+  "decode_ms_per_tok": 5.769700050354004,
+  "decode_tok_s": 173.32009410179103
 }

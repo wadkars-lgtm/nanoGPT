@@ -45,9 +45,9 @@ params: {
   "ckpt_name": ""
 }
 metrics: {
-  "peak_alloc_bytes": 5814069248,
+  "peak_alloc_bytes": 5813020672,
   "peak_reserved_bytes": 8212447232,
-  "decode_total_ms": 2569.573974609375,
-  "decode_ms_per_tok": 80.29918670654297,
-  "decode_tok_s": 12.45397033139077
+  "decode_total_ms": 2586.98828125,
+  "decode_ms_per_tok": 80.8433837890625,
+  "decode_tok_s": 12.370063529879761
 }
