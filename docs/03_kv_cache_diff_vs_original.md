@@ -23,12 +23,12 @@ The goal is to highlight *semantic and architectural differences*, not restate u
 
 ### Original
 ```python
-logits, loss = model(idx, targets=None)
+logits, loss = nanogpt.model(idx, targets=None)
 ```
 
 ### New
 ```python
-logits, loss, present_kv = model(
+logits, loss, present_kv = nanogpt.model(
     idx,
     targets=None,
     use_cache=True,

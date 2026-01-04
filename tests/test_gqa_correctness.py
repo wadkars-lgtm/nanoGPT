@@ -4,7 +4,7 @@ import inspect
 import pytest
 import torch
 
-from model import GPT, GPTConfig
+from nanogpt.model import GPT, GPTConfig
 
 
 def _seed_all(seed: int = 1234):

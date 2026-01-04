@@ -57,7 +57,10 @@ nanoGPT typically applies `--key=value` overrides via `configurator.py`.
 
 Run this once to confirm your overrides actually take effect:
 ```bash
-python train.py config/train_shakespeare_char.py --n_head=12 --n_kv_head=3 --max_iters=1
+#Absolute pos
+python -m bench.train config/train_shakespeare_char.py --n_head=12 --n_kv_head=3 --max_iters=1
+#Rope based
+python -m bench.train config/train_shakespeare_char.py --n_head=12 --n_kv_head=3 --max_iters=1 --use_rope=True --ckpt_name=ckpt_rope_smoke
 ```
 
 You should see logging that reflects your chosen head counts (or add a one-line print in `train.py` to confirm).
@@ -99,8 +102,22 @@ All commands below keep `n_head=12` and only change `n_kv_head`.
 
 ### 4.1 MHA baseline (12 Q heads / 12 KV heads)
 ```bash
-python train.py config/train_shakespeare_char.py   --out_dir=out-attn   --ckpt_name=mha_h12_kv12   --n_head=12   --n_kv_head=12
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mha_h12_kv12 `
+  --n_head=12 `
+  --n_kv_head=12 `
+  --use_rope=False
+
 #iter 5000: loss 0.7437, lr 1.000e-04, dt 9499.10ms
+```
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mha_h12_kv12_rope `
+  --n_head=12 `
+  --n_kv_head=12 `
+  --use_rope=True
 ```
 
 **What it does**
@@ -108,9 +125,24 @@ python train.py config/train_shakespeare_char.py   --out_dir=out-attn   --ckpt_n
 - Saves checkpoints under `out-attn/` with a name prefix that includes `mha_h12_kv12`.
 
 ### 4.2 GQA (example: 12 Q heads / 3 KV heads)
-```bash
-python train.py config/train_shakespeare_char.py   --out_dir=out-attn   --ckpt_name=gqa_h12_kv3   --n_head=12   --n_kv_head=3
-#iter 5000: loss 0.7946, lr 1.000e-04, dt 9521.81ms
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=gqa_h12_kv3 `
+  --n_head=12 `
+  --n_kv_head=3 `
+  --use_rope=False
+  
+  #iter 5000: loss 0.7946, lr 1.000e-04, dt 9521.81ms
+```
+
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=gqa_h12_kv3_rope `
+  --n_head=12 `
+  --n_kv_head=3 `
+  --use_rope=True
 ```
 
 **What it does**
@@ -118,9 +150,25 @@ python train.py config/train_shakespeare_char.py   --out_dir=out-attn   --ckpt_n
 - Smaller KV cache than MHA, and typically better decode efficiency at long context.
 
 ### 4.3 MQA (12 Q heads / 1 KV head)
-```bash
-python train.py config/train_shakespeare_char.py   --out_dir=out-attn   --ckpt_name=mqa_h12_kv1   --n_head=12   --n_kv_head=1
+
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mqa_h12_kv1 `
+  --n_head=12 `
+  --n_kv_head=1 `
+  --use_rope=False
+
 #iter 5000: loss 0.8281, lr 1.000e-04, dt 9220.43ms
+```
+
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mqa_h12_kv1_rope `
+  --n_head=12 `
+  --n_kv_head=1 `
+  --use_rope=True
 ```
 
 **What it does**
@@ -152,9 +200,12 @@ Your training loop typically writes some combination of:
 Pick the **best** checkpoint for each attention variant.
 
 ```bash
-python eval_loss.py --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char
-python eval_loss.py --ckpt out-attn/gqa_h12_kv3_best.pt --dataset shakespeare_char
-python eval_loss.py --ckpt out-attn/mqa_h12_kv1_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mha_h12_kv12_rope_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/gqa_h12_kv3_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/gqa_h12_kv3_rope_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mqa_h12_kv1_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mqa_h12_kv1_rope_best.pt --dataset shakespeare_char
 ```
 **What it does**
 - Loads the checkpoint
@@ -167,9 +218,9 @@ python eval_loss.py --ckpt out-attn/mqa_h12_kv1_best.pt --dataset shakespeare_ch
 
 For convenience, you may record the outputs into a small CSV manually or via shell redirection:
 ```powershell
-python eval_loss.py --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char > eval_mha.txt
-python eval_loss.py --ckpt out-attn/gqa_h12_kv3_best.pt  --dataset shakespeare_char > eval_gqa.txt
-python eval_loss.py --ckpt out-attn/mqa_h12_kv1_best.pt  --dataset shakespeare_char > eval_mqa.txt
+python -m bench.eval_loss --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char > eval_mha.txt
+python -m bench.eval_loss --ckpt out-attn/gqa_h12_kv3_best.pt  --dataset shakespeare_char > eval_gqa.txt
+python -m bench.eval_loss --ckpt out-attn/mqa_h12_kv1_best.pt  --dataset shakespeare_char > eval_mqa.txt
 ```
 
 ---
@@ -197,9 +248,9 @@ Your training loop typically writes some combination of:
 Pick the **best** checkpoint for each attention variant.
 
 ```bash
-python eval_loss.py --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char
-python eval_loss.py --ckpt out-attn/gqa_h12_kv3_best.pt --dataset shakespeare_char
-python eval_loss.py --ckpt out-attn/mqa_h12_kv1_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/gqa_h12_kv3_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mqa_h12_kv1_best.pt --dataset shakespeare_char
 ```
 
 **What it does**
@@ -223,12 +274,12 @@ This script:
 - saves raw eval logs for auditability
 
 ```powershell
-python .\run_eval_compare.py `
+python -m bench.run_eval_compare `
   --dataset shakespeare_char `
   --out_dir results\gqa `
-  --labels MHA,GQA,MQA `
-  --n_kv_heads 12,3,1 `
-  --ckpts out-attn/mha_h12_kv12_best.pt,out-attn/gqa_h12_kv3_best.pt,out-attn/mqa_h12_kv1_best.pt
+  --labels MHA,MHA_ROPE,GQA,GQA_ROPE,MQA,MQA_ROPE `
+  --n_kv_heads 12,12,3,3,1,1 `
+  --ckpts out-attn/mha_h12_kv12_best.pt,out-attn/mha_h12_kv12_rope_best.pt,out-attn/gqa_h12_kv3_best.pt,out-attn/gqa_h12_kv3_rope_best.pt,out-attn/mqa_h12_kv1_best.pt,out-attn/mqa_h12_kv1_rope_best.pt
 ```
 
 This produces:
@@ -242,7 +293,7 @@ This produces:
 Use `plot_eval_compare.py` to generate accuracy plots directly from the CSV:
 
 ```powershell
-python .\plot_eval_compare.py `
+python -m bench.plot_eval_compare `
   --csv results\gqa\eval_compare.csv `
   --out_dir results\gqa\plots
 ```
@@ -292,7 +343,7 @@ and `sample.py` should use it automatically when `--dataset=shakespeare_char` is
 
 #### MHA
 ```powershell
-python .\sample.py `
+python -m bench.sample `
   --out_dir=out-attn `
   --ckpt_name=mha_h12_kv12 `
   --dataset=shakespeare_char `
@@ -305,7 +356,7 @@ python .\sample.py `
 
 #### GQA
 ```powershell
-python .\sample.py `
+python -m bench.sample `
   --out_dir=out-attn `
   --ckpt_name=gqa_h12_kv3 `
   --dataset=shakespeare_char `
@@ -318,7 +369,7 @@ python .\sample.py `
 
 #### MQA
 ```powershell
-python .\sample.py `
+python -m bench.sample `
   --out_dir=out-attn `
   --ckpt_name=mqa_h12_kv1 `
   --dataset=shakespeare_char `
@@ -331,7 +382,7 @@ python .\sample.py `
 
 #### Prompt from a file
 ```powershell
-python .\sample.py `
+python -m bench.sample `
   --out_dir=out-attn `
   --ckpt_name=mha_h12_kv12 `
   --dataset=shakespeare_char `
@@ -341,7 +392,7 @@ python .\sample.py `
 ```
 
 ```powershell
-python .\sample.py `
+python -m bench.sample `
   --out_dir=out-attn `
   --ckpt_name=gqa_h12_kv3 `
   --dataset=shakespeare_char `
@@ -351,7 +402,7 @@ python .\sample.py `
 ```
 
 ```powershell
-python .\sample.py `
+python -m bench.sample `
   --out_dir=out-attn `
   --ckpt_name=mqa_h12_kv1 `
   --dataset=shakespeare_char `
@@ -388,8 +439,15 @@ Your benchmark script must accept these flags (or you modify sweep script accord
 - `--n_kv_head=...`
 
 ### 7.3 Run the sweep (decode + KV cache enabled)
-```bash
-python sweep_n_kv_head.py   --script=batch_infer.py   --phase=decode   --kv_cache=true   --n_head=12   --n_kv_heads=12,6,4,3,2,1   --prompt_lens=128,512,1024,2048   --batch_sizes=1,4,8,16,32
+```powershell
+python -m bench.sweep_n_kv_head `   
+      --script=batch_infer.py   `
+      --phase=decode            ` 
+      --kv_cache=true           `
+      --n_head=12               `
+      --n_kv_heads=12,6,4,3,2,1 `   
+      --prompt_lens=128,512,1024,2048 `   
+      --batch_sizes=1,4,8,16,32 `
 ```
 
 **What it does**
@@ -405,16 +463,17 @@ python sweep_n_kv_head.py   --script=batch_infer.py   --phase=decode   --kv_cach
 **Note:**
 #### Important clarification
 
-The command below **does not use your trained checkpoints** unless your `batch_infer.py` explicitly loads them (most nanoGPT-style benchmark scripts do **not**):
+The command below **does not use your trained checkpoints** unless your `batch_infer.py` explicitly loads them 
+(most nanoGPT-style benchmark scripts do **not**):
 
-```bash
-python sweep_n_kv_head.py \
-  --script=batch_infer.py \
-  --phase=decode \
-  --kv_cache=true \
-  --n_head=12 \
-  --n_kv_heads=12,6,4,3,2,1 \
-  --prompt_lens=128,512,1024,2048 \
+```powershell
+python -m bench.sweep_n_kv_head '
+  --script=batch_infer.py '
+  --phase=decode '
+  --kv_cache=true '
+  --n_head=12 '
+  --n_kv_heads=12,6,4,3,2,1 '
+  --prompt_lens=128,512,1024,2048 '
   --batch_sizes=1,4,8,16,32
 ```
 
@@ -492,14 +551,21 @@ In that case:
 
 
 ```powershell
-python batch_infer.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --phase=decode --kv_cache=true --prompt_len=2048 --batch_size=8 --max_new_tokens=128
-python batch_infer.py --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --phase=decode --kv_cache=true --prompt_len=2048 --batch_size=8 --max_new_tokens=128
-python batch_infer.py --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --phase=decode --kv_cache=true --prompt_len=2048 --batch_size=8 --max_new_tokens=128
+python -m bench.batch_infer --out_dir=out-attn --ckpt_name=mha_h12_kv12 --phase=decode --kv_cache=true --prompt_len=2048 --batch_size=8 --max_new_tokens=128
+python -m bench.batch_infer --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --phase=decode --kv_cache=true --prompt_len=2048 --batch_size=8 --max_new_tokens=128
+python -m bench.batch_infer --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --phase=decode --kv_cache=true --prompt_len=2048 --batch_size=8 --max_new_tokens=128
 ```
 
 ### 7.4 Optional: run prefill sweep (KV cache doesn’t matter much for prefill)
-```bash
-python sweep_n_kv_head.py   --script=batch_infer.py   --phase=prefill   --kv_cache=true   --n_head=12   --n_kv_heads=12,6,4,3,2,1   --prompt_lens=128,512,1024,2048   --batch_sizes=1,4,8,16,32
+```powershell
+python -m bench.sweep_n_kv_head `   
+  --script=batch_infer.py `   
+  --phase=prefill   `
+  --kv_cache=true   `
+  --n_head=12   `
+  --n_kv_heads=12,6,4,3,2,1 `   
+  --prompt_lens=128,512,1024,2048 `   
+  --batch_sizes=1,4,8,16,32 
 ```
 
 ### 7.5) Plot and visualize sweep results
@@ -545,7 +611,7 @@ This step converts the raw sweep outputs into **readable performance graphs**.
 From repo root:
 
 ```powershell
-python .\plot_sweep.py --csv results\gqa\sweep.csv --write_parsed_csv
+python -m bench.plot_sweep --csv results\gqa\sweep.csv --write_parsed_csv
 ```
 
 Expected outputs:
@@ -657,30 +723,35 @@ pytest -q
 
 2) Train:
 ```bash
-python train.py config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --n_head=12 --n_kv_head=12
-python train.py config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --n_head=12 --n_kv_head=3
-python train.py config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --n_head=12 --n_kv_head=1
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --n_head=12 --n_kv_head=12
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --n_head=12 --n_kv_head=3
+python -m bench.train config/train_shakespeare_char.py --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --n_head=12 --n_kv_head=1
 ```
 
 3) Eval:
 ```bash
-python eval_loss.py --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char
-python eval_loss.py --ckpt out-attn/gqa_h12_kv3_best.pt  --dataset shakespeare_char
-python eval_loss.py --ckpt out-attn/mqa_h12_kv1_best.pt  --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mha_h12_kv12_best.pt --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/gqa_h12_kv3_best.pt  --dataset shakespeare_char
+python -m bench.eval_loss --ckpt out-attn/mqa_h12_kv1_best.pt  --dataset shakespeare_char
 ```
 
 4) Sample (PowerShell):
 ```powershell
-python .\sample.py --out_dir=out-attn --ckpt_name=mha_h12_kv12 --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
-python .\sample.py --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
-python .\sample.py --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
+python -m bench.sample --out_dir=out-attn --ckpt_name=mha_h12_kv12 --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
+python -m bench.sample --out_dir=out-attn --ckpt_name=gqa_h12_kv3  --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
+python -m bench.sample --out_dir=out-attn --ckpt_name=mqa_h12_kv1  --dataset=shakespeare_char --start="`n" --num_samples=1 --max_new_tokens=200
 ```
 
 5) Sweep:
 ```bash
-python sweep_n_kv_head.py --script=batch_infer.py --phase=decode --kv_cache=true   --n_head=12 --n_kv_heads=12,6,4,3,2,1 --prompt_lens=128,512,1024,2048 --batch_sizes=1,4,8,16,32
+python -m bench.sweep_n_kv_head --script=batch_infer.py --phase=decode --kv_cache=true   --n_head=12 --n_kv_heads=12,6,4,3,2,1 --prompt_lens=128,512,1024,2048 --batch_sizes=1,4,8,16,32
 ```
 
+6) Plot:
+```bash
+python -m bench.plot_sweep --csv results/gqa/sweep.csv --write_parsed_csv
+```
+```
 ---
 
 ## 10) Common failure modes (fast triage)

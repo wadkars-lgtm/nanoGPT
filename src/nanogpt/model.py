@@ -6,10 +6,16 @@ This version adds:
   2) **MHA / GQA / MQA** support via configurable n_kv_head.
   3) **use_sdpa** knob for deterministic tests (disable SDPA) or fast path (enable SDPA).
   4) **Sliding Window Attention (SWA)** via config.sliding_window_size (mask-only SWA).
+  5) **RoPE (Rotary Positional Embeddings)** via config.use_rope (flagged, optional).
 
 SWA semantics (mask-only, no KV eviction):
   - Attention is restricted to the last W tokens for each query position.
   - KV cache can still grow to full T_total; SWA only changes which keys/values are visible.
+
+RoPE semantics (flagged, no eviction support required yet):
+  - If use_rope=True, position is encoded by rotating Q and K (not V).
+  - Absolute positions MUST be monotonic. In this repo (no eviction), position offset = T_past is correct.
+  - If you later implement KV eviction, you must decouple absolute position from KV length.
 
 KV cache API:
   - GPT.forward(idx, targets=None, use_cache=True, past_kv=...) ->
@@ -33,7 +39,7 @@ Modes:
 
 Notes on attention masking:
   - Prefill (past_kv is None): causal mask is required.
-  - Decode-step (T_new == 1 with past): causal mask is NOT needed because keys contain only past+current.
+  - Decode-step (T_new == 1 with past): causal mask is NOT needed (unless SWA enabled).
   - Chunked decode (T_new > 1 with past): we apply an offset causal mask that prevents attending
     to “future” tokens within the newly provided chunk.
   - SWA (sliding_window_size=W): apply an offset *banded* causal mask in all modes
@@ -88,6 +94,24 @@ class CausalSelfAttention(nn.Module):
         # Sliding window attention (None => full causal)
         self.sliding_window_size = getattr(config, "sliding_window_size", None)
 
+        # RoPE
+        self.use_rope = bool(getattr(config, "use_rope", False))
+        self.rope_theta = float(getattr(config, "rope_theta", 10000.0))
+        rope_dim = getattr(config, "rope_dim", None)
+        self.rope_dim = self.head_dim if rope_dim is None else int(rope_dim)
+        if self.use_rope:
+            assert self.rope_dim % 2 == 0, "rope_dim must be even"
+            assert 0 < self.rope_dim <= self.head_dim, "rope_dim must be in (0, head_dim]"
+
+            # Precompute inv_freq (float32) as a buffer (device moved with module).
+            # inv_freq shape: (rope_dim/2,)
+            inv_freq = 1.0 / (
+                self.rope_theta ** (torch.arange(0, self.rope_dim, 2, dtype=torch.float32) / self.rope_dim)
+            )
+            self.register_buffer("rope_inv_freq", inv_freq, persistent=False)
+        else:
+            self.register_buffer("rope_inv_freq", torch.empty(0), persistent=False)
+
         kv_dim = self.n_kv_head * self.head_dim
 
         # Separate projections for Q and KV (KV packed as [K;V])
@@ -113,6 +137,59 @@ class CausalSelfAttention(nn.Module):
                 persistent=False,
             )
 
+    # -----------------------
+    # RoPE helpers
+    # -----------------------
+    def _rope_cos_sin(self, pos: torch.Tensor, device, dtype) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        pos: (T,) int64 positions
+        returns cos, sin: each (1, 1, T, rope_dim/2) in `dtype`
+        """
+        inv_freq = self.rope_inv_freq.to(device=device)  # float32 buffer on device
+        # angles: (T, rope_dim/2) in float32 for stability
+        angles = torch.outer(pos.to(torch.float32), inv_freq)  # (T, rope_dim/2)
+        cos = angles.cos().to(dtype=dtype)
+        sin = angles.sin().to(dtype=dtype)
+        return cos[None, None, :, :], sin[None, None, :, :]
+
+    @staticmethod
+    def _rotate_half(x: torch.Tensor) -> torch.Tensor:
+        """
+        x: (..., D) where D is even
+        returns: (..., D) where each pair (x0,x1) -> (-x1, x0)
+        """
+        x1 = x[..., ::2]
+        x2 = x[..., 1::2]
+        out = torch.stack((-x2, x1), dim=-1)
+        return out.flatten(-2)
+
+    def _apply_rope(self, x: torch.Tensor, pos: torch.Tensor) -> torch.Tensor:
+        """
+        Apply RoPE to the first rope_dim dims of x.
+        x: (B, H, T, head_dim)
+        pos: (T,) absolute positions for these tokens
+        """
+        if not self.use_rope:
+            return x
+
+        B, H, T, D = x.shape
+        rd = self.rope_dim
+        x_rope = x[..., :rd]              # (B,H,T,rd)
+        x_pass = x[..., rd:]              # (B,H,T,D-rd)
+
+        cos, sin = self._rope_cos_sin(pos, device=x.device, dtype=x.dtype)  # (1,1,T,rd/2)
+
+        # reshape x_rope into pairs via rotate_half trick
+        # cos/sin broadcast over B,H
+        x_out = (x_rope * cos.repeat_interleave(2, dim=-1)) + (self._rotate_half(x_rope) * sin.repeat_interleave(2, dim=-1))
+
+        if x_pass.numel() == 0:
+            return x_out
+        return torch.cat([x_out, x_pass], dim=-1)
+
+    # -----------------------
+    # Masks
+    # -----------------------
     def _build_offset_causal_mask_bool(
         self, T_new: int, T_total: int, past_len: int, device
     ) -> torch.Tensor:
@@ -194,12 +271,15 @@ class CausalSelfAttention(nn.Module):
         x: torch.Tensor,
         use_cache: bool = False,
         past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        pos_offset: int = 0,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """
         Args:
           x: (B, T_new, C)
           use_cache: if True, returns present_kv = (k_total, v_total)
           past_kv: optional tuple (k_past, v_past) with shapes (B, n_kv_head, T_past, head_dim)
+          pos_offset: absolute position offset for the first token in this call (for RoPE).
+                     In current (no-eviction) design, pos_offset == past_len.
 
         Returns:
           y: (B, T_new, C)
@@ -224,6 +304,18 @@ class CausalSelfAttention(nn.Module):
             assert k_past.size(1) == self.n_kv_head, f"expected k_past heads={self.n_kv_head}, got {k_past.size(1)}"
             assert v_past.size(1) == self.n_kv_head, f"expected v_past heads={self.n_kv_head}, got {v_past.size(1)}"
             past_len = k_past.size(2)
+
+        # RoPE: apply to q and the *new* k using absolute positions for this call.
+        # IMPORTANT: cached k_past is assumed already RoPE-rotated from earlier calls.
+        if self.use_rope:
+            # In current design (no eviction), pos_offset should equal past_len.
+            # We accept pos_offset explicitly so you can decouple later.
+            pos = torch.arange(pos_offset, pos_offset + T_new, device=x.device, dtype=torch.long)  # (T_new,)
+            q = self._apply_rope(q, pos)
+            k = self._apply_rope(k, pos)
+
+        # Now concatenate cache
+        if past_kv is not None:
             k = torch.cat([k_past, k], dim=2)  # (B, n_kv_head, T_total, hd)
             v = torch.cat([v_past, v], dim=2)
 
@@ -334,8 +426,9 @@ class Block(nn.Module):
         x: torch.Tensor,
         use_cache: bool = False,
         past_kv: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        pos_offset: int = 0,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
-        a, present_kv = self.attn(self.ln_1(x), use_cache=use_cache, past_kv=past_kv)
+        a, present_kv = self.attn(self.ln_1(x), use_cache=use_cache, past_kv=past_kv, pos_offset=pos_offset)
         x = x + a
         x = x + self.mlp(self.ln_2(x))
         return x, present_kv
@@ -355,6 +448,11 @@ class GPTConfig:
     # Sliding Window Attention (None => full causal attention)
     sliding_window_size: Optional[int] = None
 
+    # RoPE flag + params
+    use_rope: bool = False
+    rope_theta: float = 10000.0
+    rope_dim: Optional[int] = None  # None => head_dim (full rotary)
+
     dropout: float = 0.0
     bias: bool = True
     use_sdpa: bool = True
@@ -369,6 +467,12 @@ class GPTConfig:
         if self.sliding_window_size is not None:
             assert isinstance(self.sliding_window_size, int) and self.sliding_window_size > 0
 
+        if self.use_rope:
+            head_dim = self.n_embd // self.n_head
+            rd = head_dim if self.rope_dim is None else int(self.rope_dim)
+            assert 0 < rd <= head_dim, "rope_dim must be in (0, head_dim]"
+            assert rd % 2 == 0, "rope_dim must be even"
+
 
 class GPT(nn.Module):
     def __init__(self, config: GPTConfig):
@@ -378,10 +482,13 @@ class GPT(nn.Module):
 
         self.config = config
 
+        # If using RoPE, we keep wpe=None (no learned absolute position embeddings).
+        wpe = None if config.use_rope else nn.Embedding(config.block_size, config.n_embd)
+
         self.transformer = nn.ModuleDict(
             dict(
                 wte=nn.Embedding(config.vocab_size, config.n_embd),
-                wpe=nn.Embedding(config.block_size, config.n_embd),
+                wpe=wpe,
                 drop=nn.Dropout(config.dropout),
                 h=nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
                 ln_f=LayerNorm(config.n_embd, bias=config.bias),
@@ -404,7 +511,9 @@ class GPT(nn.Module):
     def get_num_params(self, non_embedding: bool = True) -> int:
         n_params = sum(p.numel() for p in self.parameters())
         if non_embedding:
-            n_params -= self.transformer.wpe.weight.numel()
+            # ModuleDict supports "in" for key membership
+            if "wpe" in self.transformer and isinstance(self.transformer["wpe"], nn.Embedding):
+                n_params -= self.transformer["wpe"].weight.numel()
         return n_params
 
     def _init_weights(self, module: nn.Module) -> None:
@@ -431,8 +540,9 @@ class GPT(nn.Module):
           - list length n_layer of (k, v) tuples (or None entries),
             where k,v shape = (B, n_kv_head, T_past, head_dim)
 
-        Position embedding offset:
-          When using cache, positions must start at T_past.
+        Position handling:
+          - Absolute embeddings (use_rope=False): positions start at T_past (for cache).
+          - RoPE (use_rope=True): attention receives pos_offset=T_past for this call (no eviction).
         """
         device = idx.device
         b, t_new = idx.size()
@@ -452,17 +562,23 @@ class GPT(nn.Module):
             f"Cannot forward total length {T_total}, block size is only {self.config.block_size}"
         )
 
-        pos = torch.arange(T_past, T_total, dtype=torch.long, device=device)  # (t_new,)
-
         tok_emb = self.transformer.wte(idx)  # (b, t_new, n_embd)
-        pos_emb = self.transformer.wpe(pos)  # (t_new, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+
+        if self.config.use_rope:
+            # No learned position embeddings.
+            x = self.transformer.drop(tok_emb)
+        else:
+            pos = torch.arange(T_past, T_total, dtype=torch.long, device=device)  # (t_new,)
+            pos_emb = self.transformer.wpe(pos)  # (t_new, n_embd)
+            x = self.transformer.drop(tok_emb + pos_emb)
 
         present = [] if use_cache else None
 
         for i, block in enumerate(self.transformer.h):
             layer_past = past_kv[i] if use_cache else None
-            x, pkv = block(x, use_cache=use_cache, past_kv=layer_past)
+            # For RoPE, pos_offset is the absolute starting position for this chunk.
+            # In current (no eviction) design, pos_offset == T_past.
+            x, pkv = block(x, use_cache=use_cache, past_kv=layer_past, pos_offset=T_past)
             if use_cache:
                 present.append(pkv)
 
@@ -486,7 +602,12 @@ class GPT(nn.Module):
     def crop_block_size(self, block_size: int) -> None:
         assert block_size <= self.config.block_size
         self.config.block_size = block_size
-        self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+
+        # Crop wpe only in abs-pos mode.
+        if self.transformer.get("wpe", None) is not None and isinstance(self.transformer.wpe, nn.Embedding):
+            self.transformer.wpe.weight = nn.Parameter(self.transformer.wpe.weight[:block_size])
+
+        # Crop manual attention bias buffer (if present)
         for block in self.transformer.h:
             if hasattr(block.attn, "bias"):
                 block.attn.bias = block.attn.bias[:, :, :block_size, :block_size]
@@ -497,9 +618,10 @@ class GPT(nn.Module):
         Loads HF GPT-2 weights into this implementation.
 
         IMPORTANT:
-          - Supported ONLY for MHA (n_kv_head == n_head).
-          - If you want GQA/MQA with pretrained weights, you must define a projection
-            remapping strategy (not implemented here).
+          - Supported ONLY for:
+              * absolute position embeddings (use_rope=False)
+              * MHA (n_kv_head == n_head)
+          - If you want RoPE, you must train/fine-tune a RoPE model (not provided here).
         """
         assert model_type in {"gpt2", "gpt2-medium", "gpt2-large", "gpt2-xl"}
         override_args = override_args or {}
@@ -522,6 +644,8 @@ class GPT(nn.Module):
         config_args["bias"] = True
         # MHA only
         config_args["n_kv_head"] = config_args["n_head"]
+        # RoPE disabled for GPT-2 loading
+        config_args["use_rope"] = False
 
         if "dropout" in override_args:
             print(f"overriding dropout rate to {override_args['dropout']}")

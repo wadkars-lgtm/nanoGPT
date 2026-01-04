@@ -1,0 +1,36 @@
+{
+  "meta": {
+    "device": "cuda",
+    "dtype": "bfloat16",
+    "torch_version": "2.9.1+cu128",
+    "cuda": "12.8",
+    "gpu_name": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+    "time_unix": 1767383516.8536398
+  },
+  "params": {
+    "batch_size": 8,
+    "prompt_len": 2048,
+    "max_new_tokens": 128,
+    "kv_cache": false,
+    "phase": "both",
+    "prefix_source": "model",
+    "prefix_cache_dir": "results/prefix_cache/mha_rope",
+    "cache_prefix": true,
+    "prefix_seed_len": 1,
+    "n_layer": 12,
+    "n_head": 12,
+    "n_kv_head": 12,
+    "n_embd": 768,
+    "vocab_size": 50304,
+    "compile": false
+  },
+  "metrics": {
+    "peak_alloc_bytes": 6691112448,
+    "peak_reserved_bytes": 11022630912,
+    "prefill_ms": 125.24777475992839,
+    "prefill_ms_per_tok": 0.061156140019496284,
+    "decode_total_ms": 16649.611328125,
+    "decode_ms_per_tok": 130.07508850097656,
+    "decode_tok_s": 7.68786815123041
+  }
+}

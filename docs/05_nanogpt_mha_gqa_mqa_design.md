@@ -70,31 +70,31 @@ Below assumes you already have a standard config file like `config/train_shakesp
 
 ### MHA (baseline)
 
-```bash
-python train.py config/train_shakespeare_char.py \
-  --out_dir=out-attn \
-  --ckpt_name=mha \
-  --n_head=12 \
+```powershell
+python -m bench.train  config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mha `
+  --n_head=12 `
   --n_kv_head=12
 ```
 
 ### GQA (e.g., 2 KV heads, 6 Q heads)
 
-```bash
-python train.py config/train_shakespeare_char.py \
-  --out_dir=out-attn \
-  --ckpt_name=gqa_kv2 \
-  --n_head=12 \
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=gqa_kv2 `
+  --n_head=12 `
   --n_kv_head=3
 ```
 
 ### MQA (1 KV head)
 
-```bash
-python train.py config/train_shakespeare_char.py \
-  --out_dir=out-attn \
-  --ckpt_name=mqa \
-  --n_head=12 \
+```powershell
+python -m bench.train config/train_shakespeare_char.py `
+  --out_dir=out-attn `
+  --ckpt_name=mqa `
+  --n_head=12 `
   --n_kv_head=1
 ```
 
@@ -103,32 +103,22 @@ Only change `n_kv_head`.
 
 ---
 
-## How to show accuracy is not affected
+## Accuracy comparison
 
-You won’t get “identical accuracy” across runs because this changes the parameterization and training dynamics.
-What you *can* show (and should) is that:
-
-1. **For the same compute budget**, GQA/MQA reaches similar validation loss.
-2. **For the same validation loss**, GQA/MQA trains faster / uses less memory.
-
-Concretely:
-
-- Report `best_val_loss` and the iteration where it was achieved.
-- Report peak `torch.cuda.max_memory_allocated()`.
-- Report tokens/sec.
-
-Make a small table like:
-
-| Variant | n_head | n_kv_head | Params (M) | best val loss | iter @ best | tok/s | peak VRAM |
-|---|---:|---:|---:|---:|---:|---:|---:|
+| Variant | n_head | n_kv_head | Params (M) | best val loss | iter @ best |
+|---|---:|---:|-----------:|--------------:|------------:|
+|mha|12|12|      10.67 |          0.75 |        5000 |
+|gqa|12|6|       82.5 |          0.75 |        5000 |
+|mqa|12|1|       27.5 |              0.75 |        5000 |
 
 ---
 
 ## Expected results pattern
 
-- **MQA**: biggest KV-cache benefit at inference (smallest KV per token), but might slightly hurt quality at a fixed model size unless you compensate elsewhere.
+- **MQA**: biggest KV-cache benefit at inference (smallest KV per token), but might slightly hurt quality at a fixed 
+model size unless you compensate elsewhere.
 - **GQA**: usually the sweet spot: most KV-cache benefit with less quality hit.
 - **MHA**: best flexibility/quality at fixed size, worst KV memory scaling.
 
-This is exactly the setup you need for your “Architecture-Level Comparison” deliverable: KV-cache size and hardware implications drop out cleanly once you can toggle `n_kv_head`.
+
 
