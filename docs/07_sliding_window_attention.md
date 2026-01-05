@@ -1,18 +1,26 @@
-# Sliding Window Attention (SWA) — Current Implementation
+# Sliding Window Attention (SWA) — Mask-Only Design and Benchmark Results
 
-This document describes the **Sliding Window Attention (SWA)** strategy currently implemented in this nanoGPT fork.
+This document describes the **current Sliding Window Attention (SWA) implementation** in this nanoGPT fork, explains **why it does not improve performance**, and records the **benchmark evidence** supporting that conclusion.
 
-The implementation is **intentional, minimal, and correctness-first**:
-- SWA is enforced **purely via attention masking**
-- **No KV cache eviction** is performed
-- Behavior is deterministic and compatible with MHA, GQA, and MQA
-- Designed to be a stepping stone toward production-style SWA
+The design is **intentional, minimal, and correctness-first**.
+
+---
+
+## Executive Summary
+
+- SWA is implemented **purely via attention masking**
+- **No KV cache eviction or truncation** is performed
+- Attention semantics are correct and deterministic
+- **No performance or memory reduction is expected**
+- In practice, masked SWA is **slower** under PyTorch SDPA
+
+This implementation exists to validate **architectural behavior**, not to optimize inference speed.
 
 ---
 
 ## What Sliding Window Attention Means Here
 
-For a given query token at position `t`, attention is restricted to:
+For a query token at position `t`, attention is restricted to:
 
 ```
 [t - W + 1, ..., t]
@@ -21,174 +29,188 @@ For a given query token at position `t`, attention is restricted to:
 Where:
 - `W = sliding_window_size`
 - Tokens outside the window are **masked out**
-- The model **cannot attend to earlier tokens**, even though they exist in memory
+- The model **cannot attend to earlier tokens**, even though they remain in memory
 
-This matches the *logical behavior* of SWA, but **not yet the memory optimization**.
+This enforces the **logical behavior** of SWA, but **not the systems optimization**.
 
 ---
 
 ## Key Design Choice: Mask-Only SWA
 
-### What we do
+### What is implemented
+
 - KV cache **continues to grow** with total sequence length
-- A **banded causal mask** enforces the window constraint
+- A **banded causal attention mask** enforces the window constraint
 - Masking is applied consistently across:
   - Prefill
   - Decode-step (`T_new == 1`)
   - Chunked decode (`T_new > 1 with past_kv`)
 
-### What we do NOT do (yet)
-- No KV cache truncation
-- No KV eviction or rolling buffers
-- No memory footprint reduction
+### What is intentionally not implemented
 
-This makes the implementation:
-- Simple
-- Correct
-- Easy to reason about
-- Easy to validate against full attention
+- No KV cache eviction
+- No rolling buffers
+- No truncation of K/V tensors
+- No sparse or block-sparse attention kernels
 
----
-
-## Why Mask-Only SWA Is Still Useful
-
-Even without KV eviction, this implementation is valuable:
-
-1. **Correctness validation**
-   - Ensures attention semantics are correct
-   - Matches expected behavior for edge cases
-
-2. **Performance signal**
-   - Reduces *effective attention width*
-   - Can reduce compute when using optimized kernels
-
-3. **Foundation for future work**
-   - KV eviction can be layered later
-   - RoPE-relative positioning issues can be explored cleanly
+As a result:
+- **Tensor shapes do not shrink**
+- **Attention matmul size is unchanged**
+- **Memory footprint is unchanged**
 
 ---
 
-## Implementation Details
+## Why Mask-Only SWA Does NOT Improve Performance
 
-### Configuration
+There are two independent reasons.
 
-SWA is enabled via:
+### 1. Masking does not reduce compute
 
-```python
-GPTConfig(
-    sliding_window_size = W  # int or None
-)
-```
+Even with SWA enabled:
 
-- `None` → full causal attention
-- `W == block_size` → equivalent to full attention
-- `W == 1` → token can attend only to itself
+- K/V tensors still have length `T_total`
+- SDPA still computes attention against **all keys**
+- The mask only zeroes out contributions *after* dot products
+
+Unless keys/values are **evicted or sliced**, the attention kernel still performs full work.
 
 ---
 
-### Mask Construction
+### 2. Masked SDPA disables fast paths
 
-For each query index `i` and key index `j`:
+When `sliding_window_size = None`, decode-step attention uses:
 
-**Causal constraint**
+- `attn_mask = None`
+- `is_causal = False`
+
+This allows PyTorch to use its **fast SDPA / FlashAttention-style path**.
+
+When SWA is enabled:
+
+- An **explicit additive mask** is passed to SDPA
+- This forces SDPA into a **more general, slower kernel path**
+
+As a result, **mask-only SWA is strictly slower than baseline full attention**.
+
+---
+
+## Benchmark Evidence
+
+The following benchmark measures **decode-step latency** with KV cache enabled.
+
+### Command
+
+```bash
+python -m bench.swa_decode_bench
 ```
-j <= past_len + i
+
+### Output
+
+```
+number of parameters: 123.69M
+W=None  steps=128  total=0.6901s  ms/tok=5.391
+number of parameters: 123.69M
+W=1     steps=128  total=0.8123s  ms/tok=6.346
+number of parameters: 123.69M
+W=2048  steps=128  total=0.8036s  ms/tok=6.278
+number of parameters: 123.69M
+W=1024  steps=128  total=0.8092s  ms/tok=6.322
 ```
 
-**Window constraint**
-```
-j >= (past_len + i) - (W - 1)
-```
+### Interpretation
 
-Both must be satisfied.
+- `W=None` (full attention) is the **fastest**
+- All SWA configurations are **slower and nearly identical**
+- Window size has **no impact on performance**
 
-This is implemented as:
-- Boolean masks for manual attention
-- Additive `-inf` masks for SDPA
+This confirms:
+
+- No compute reduction is occurring
+- Masked SDPA introduces overhead
+- SWA here is a **semantic constraint only**
 
 ---
 
 ## Interaction with KV Cache
 
-### Important Clarification
-
 Even with SWA enabled:
 
-- KV tensors still have shape:
-  ```
-  (B, n_kv_head, T_total, head_dim)
-  ```
+```
+(B, n_kv_head, T_total, head_dim)
+```
+
+- KV cache grows linearly with total sequence length
 - Tokens outside the window:
-  - Exist in KV cache
+  - Remain stored
   - Are never attended to
   - Still consume memory
 
-This is **intentional**.
+This is **intentional and explicit**.
 
 ---
 
-## Expected Behavior (Sanity Checks)
+## Expected and Verified Properties
 
-The following sanity properties must hold:
-
-| Configuration | Expected Result |
-|--------------|----------------|
-| `sliding_window_size = None` | Identical to baseline |
-| `sliding_window_size = block_size` | Identical to baseline |
-| `sliding_window_size = 1` | Severe quality collapse |
-| Token-by-token decode vs chunked decode | Identical logits |
-
-Dedicated sanity scripts validate these properties.
+| Configuration | Expected Behavior | Status |
+|--------------|------------------|--------|
+| `W = None` | Baseline behavior | ✅ |
+| `W = block_size` | Equivalent to baseline | ✅ |
+| `W = 1` | Severe quality collapse | ✅ |
+| Token-by-token vs chunked decode | Identical logits | ✅ |
 
 ---
 
-## Known Limitations
+## Why KV Eviction Is Not Implemented
 
-1. **No memory savings**
-   - KV cache grows linearly with total sequence length
+KV eviction would:
+- Reduce memory
+- Reduce attention compute
+- Introduce **significant complexity**
 
-2. **RoPE interaction**
-   - Absolute positional embeddings work trivially
-   - RoPE requires careful handling of position offsets
-   - Chunked decode tests are required for correctness
+Specifically:
+- RoPE position semantics become non-trivial
+- Absolute vs relative position handling must change
+- Cache bookkeeping becomes stateful and error-prone
 
-3. **Not production SWA**
-   - Production systems also evict or roll KV cache
-   - This implementation intentionally stops short of that
+For the purposes of **Deliverable B (architecture-level comparison)**, this complexity is unnecessary.
 
 ---
 
-## Why This Design Was Chosen
+## Design Intent
 
-This implementation prioritizes:
+This SWA implementation prioritizes:
 
 - Semantic correctness
-- Testability
-- Architectural clarity
+- Determinism
+- Ease of reasoning
 - Compatibility with MHA / GQA / MQA
-- A clean baseline for future KV eviction work
+- A clean baseline for architectural analysis
 
-It avoids premature complexity while still modeling real SWA behavior.
+It intentionally stops short of production-grade SWA optimizations.
 
 ---
 
-## Next Logical Extensions (Not Implemented)
+## What This Implementation Is (and Is Not)
 
-- KV cache eviction / rolling buffers
-- Fixed-size KV storage
-- RoPE-aware window-relative positioning
-- Memory footprint measurements
-- Attention kernel specialization
+**This is:**
+- A correct SWA semantics implementation
+- A validation tool
+- An architectural reference point
 
-These can be added incrementally **without changing the SWA semantics** already in place.
+**This is not:**
+- A memory optimization
+- A performance optimization
+- A production SWA system
 
 ---
 
 ## Summary
 
-- SWA is enforced via masking, not memory management
-- Behavior is correct and well-tested
-- Memory usage is unchanged by design
-- This is a **foundational SWA implementation**, not the final form
+- SWA is enforced via masking only
+- KV cache size is unchanged
+- Attention compute is unchanged
+- Masked SDPA is slower than the fast causal path
+- The benchmark results are expected and correct
 
-If you are reading this expecting memory reduction: that is the *next* layer, not this one.
+This design is complete for its intended purpose. Further optimization belongs in a separate, explicitly systems-focused layer.
+
